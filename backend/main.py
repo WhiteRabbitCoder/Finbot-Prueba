@@ -32,6 +32,8 @@ import io
 import tempfile
 import os
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -42,7 +44,23 @@ import agent
 import cache
 import rag
 
-app = FastAPI(title="FinBot API")
+
+# ── Lifespan ──────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: pre-populate semantic cache and ingest RAG content
+    cache.prepopulate(lambda q: "")
+    try:
+        n = rag.ingest()
+        print(f"[RAG] Indexed {n} chunks from {rag.RAG_URL}")
+    except Exception as e:
+        print(f"[RAG] Ingest skipped: {e}")
+    yield
+    # Shutdown: nothing to clean up
+
+
+app = FastAPI(title="FinBot API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,24 +69,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ── Startup ──────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    """Pre-populate semantic cache and ingest RAG content on startup."""
-    # Semantic cache: embed and store the 5 FAQs
-    def llm_stub(q):
-        return ""  # Not needed — answers are hardcoded in prepopulate()
-    cache.prepopulate(llm_stub)
-
-    # RAG ingest — non-fatal if the URL is unreachable
-    try:
-        n = rag.ingest()
-        print(f"[RAG] Indexed {n} chunks from {rag.RAG_URL}")
-    except Exception as e:
-        print(f"[RAG] Ingest skipped: {e}")
 
 
 # ── Schemas ───────────────────────────────────────────────────
