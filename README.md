@@ -27,7 +27,7 @@ Agente conversacional bilingüe para una fintech (Colombia / EE.UU.), construido
 ### 1. Variables de entorno
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 # Editar .env con tus valores
 ```
 
