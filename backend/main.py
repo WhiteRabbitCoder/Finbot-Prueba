@@ -164,3 +164,9 @@ async def reset():
 @app.get("/health")
 async def health():
     return {"status": "ok", "rag_chunks": len(rag._chunks), "cache_entries": len(cache._cache)}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

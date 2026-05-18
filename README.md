@@ -49,12 +49,13 @@ BASE_URL=https://api.groq.com/openai/v1
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload
+cp .env.example .env   # rellenar API_KEY y ajustar PORT si hace falta
+python3 main.py
 ```
 
-El servidor inicia en `http://localhost:8000`.
+El servidor inicia en el puerto definido en `PORT` (por defecto `8000`).
 
 Al arrancar:
 - Pre-popula el caché semántico con 5 FAQs de FinBot
