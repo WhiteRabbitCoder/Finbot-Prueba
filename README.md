@@ -4,10 +4,10 @@ Agente conversacional bilingüe para una fintech (Colombia / EE.UU.), construido
 
 ## Stack
 
-- **Backend:** Python 3.11 + FastAPI + OpenAI SDK (base_url configurable)
+- **Backend:** Python 3.11 + FastAPI + OpenAI SDK (base_url configurable por servicio)
 - **Frontend:** React 18 + Tailwind CSS + Vite
-- **Vector store:** FAISS local (sin cuenta externa)
-- **Cache semántico:** numpy (implementación desde cero)
+- **Vector store:** FAISS en disco (sin cuenta externa)
+- **Caché semántico:** NeonDB / PostgreSQL con fallback automático a SQLite
 
 ## Retos implementados
 
@@ -31,19 +31,40 @@ cp backend/.env.example backend/.env
 # Editar .env con tus valores
 ```
 
-El proyecto no tiene vendor lock-in con OpenAI. Para cambiar de proveedor, solo edita `BASE_URL`:
+El proyecto no tiene vendor lock-in con OpenAI. Cada servicio tiene su propio `*_BASE_URL` y `*_API_KEY`. Si no están definidos, usan `BASE_URL` / `API_KEY` como fallback global.
 
 ```env
-# NVIDIA NIM
-BASE_URL=https://integrate.api.nvidia.com/v1
+# Proveedor global por defecto
+BASE_URL=https://api.openai.com/v1
+API_KEY=sk-...
 
-# Ollama (local)
-BASE_URL=http://localhost:11434/v1
-API_KEY=ollama
-
-# Groq
-BASE_URL=https://api.groq.com/openai/v1
+# Ejemplos de proveedores por servicio
+LLM_BASE_URL=https://api.groq.com/openai/v1          # LLM en Groq
+VISION_BASE_URL=https://api.openai.com/v1             # Visión en OpenAI
+EMBEDDINGS_BASE_URL=https://integrate.api.nvidia.com/v1  # Embeddings en NVIDIA NIM
+STT_BASE_URL=http://localhost:11434/v1                # Whisper local con Ollama
+TTS_BASE_URL=https://api.openai.com/v1                # TTS en OpenAI
 ```
+
+### Base de datos del caché semántico
+
+El caché semántico soporta dos backends con **fallback automático**:
+
+| Variable `DATABASE_URL` | Backend activo |
+|-------------------------|----------------|
+| Definida | NeonDB / PostgreSQL (cualquier Postgres compatible) |
+| Ausente | SQLite local (`cache.db`) |
+
+**Para usar NeonDB:**
+1. Crear una cuenta en [neon.tech](https://neon.tech) y un proyecto nuevo
+2. Copiar el connection string desde el dashboard
+3. Añadir al `.env`:
+
+```env
+DATABASE_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
+```
+
+**Para volver a SQLite:** comentar o eliminar `DATABASE_URL` del `.env`. Sin tocar código.
 
 ### 2. Backend
 
@@ -57,9 +78,13 @@ python3 main.py
 
 El servidor inicia en el puerto definido en `PORT` (por defecto `8000`).
 
-Al arrancar:
-- Pre-popula el caché semántico con 5 FAQs de FinBot
-- Indexa el contenido de `RAG_URL` en FAISS
+Al arrancar el servidor imprime el backend activo y el estado de persistencia:
+
+```
+[Cache] Using PostgreSQL (NeonDB)      ← o "SQLite (cache.db)" si no hay DATABASE_URL
+[Cache] Loaded 12 existing entries     ← si ya había datos; o pre-popula 5 FAQs si es primera vez
+[RAG] Loaded 38 chunks from disk       ← si faiss.index existe; o indexa la URL si es primera vez
+```
 
 ### 3. Frontend
 
@@ -107,6 +132,9 @@ La app abre en `http://localhost:5173`.
 
 ## API keys necesarias
 
-- `API_KEY`: requerida para el LLM principal y embeddings
-- CoinGecko: gratuito, sin API key
-- exchangerate.host: gratuito, sin API key
+| Servicio | Variable | Notas |
+|----------|----------|-------|
+| LLM / Visión / Embeddings / STT / TTS | `API_KEY` | O usar `*_API_KEY` por servicio |
+| CoinGecko | — | Gratuito, sin API key |
+| exchangerate.host | — | Gratuito, sin API key |
+| NeonDB | `DATABASE_URL` | Opcional — sin ella usa SQLite |
