@@ -1,10 +1,31 @@
+import os
 import sqlite3
 import numpy as np
 from config import embeddings_client, EMBEDDINGS_MODEL, SIMILARITY_THRESHOLD, CACHE_DB_PATH
 
+# DATABASE_URL present → NeonDB / PostgreSQL. Absent → SQLite fallback.
+DATABASE_URL = os.getenv("DATABASE_URL")
+_USE_PG      = bool(DATABASE_URL)
+_PH          = "%s" if _USE_PG else "?"   # SQL placeholder differs between drivers
+
 # In-memory layer for fast lookup during runtime.
-# SQLite is the source of truth — loaded into _cache on startup.
+# The DB (Postgres or SQLite) is the source of truth — loaded on startup.
 _cache: list[dict] = []
+
+
+def _connect():
+    if _USE_PG:
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    return sqlite3.connect(CACHE_DB_PATH)
+
+
+def _binary(emb: np.ndarray):
+    """Wrap embedding bytes for the active driver."""
+    if _USE_PG:
+        import psycopg2
+        return psycopg2.Binary(emb.tobytes())
+    return emb.tobytes()
 
 
 def _embed(text: str) -> np.ndarray:
@@ -18,26 +39,43 @@ def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
 
 def _init_db() -> None:
     """Create table if not exists and load all existing entries into _cache."""
-    con = sqlite3.connect(CACHE_DB_PATH)
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS cache (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            question  TEXT NOT NULL,
-            answer    TEXT NOT NULL,
-            embedding BLOB NOT NULL
-        )
-    """)
+    con = _connect()
+    cur = con.cursor()
+
+    if _USE_PG:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                id        SERIAL PRIMARY KEY,
+                question  TEXT NOT NULL,
+                answer    TEXT NOT NULL,
+                embedding BYTEA NOT NULL
+            )
+        """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                question  TEXT NOT NULL,
+                answer    TEXT NOT NULL,
+                embedding BLOB NOT NULL
+            )
+        """)
+
     con.commit()
-    for q, a, emb_bytes in con.execute("SELECT question, answer, embedding FROM cache"):
-        emb = np.frombuffer(emb_bytes, dtype=np.float32).copy()
+    cur.execute("SELECT question, answer, embedding FROM cache")
+    for q, a, emb_bytes in cur.fetchall():
+        emb = np.frombuffer(bytes(emb_bytes), dtype=np.float32).copy()
         _cache.append({"q": q, "a": a, "emb": emb})
     con.close()
+
+    backend = "PostgreSQL (NeonDB)" if _USE_PG else f"SQLite ({CACHE_DB_PATH})"
+    print(f"[Cache] Using {backend}")
 
 
 def prepopulate(llm_call) -> None:
     """Embed and store the 5 standard FinBot FAQs — skipped if DB already has entries."""
     if _cache:
-        print(f"[Cache] Loaded {len(_cache)} entries from {CACHE_DB_PATH}")
+        print(f"[Cache] Loaded {len(_cache)} existing entries")
         return
 
     faqs = [
@@ -54,7 +92,7 @@ def prepopulate(llm_call) -> None:
     ]
     for q, a in faqs:
         store(q, a)
-    print(f"[Cache] Pre-populated {len(faqs)} FAQs into {CACHE_DB_PATH}")
+    print(f"[Cache] Pre-populated {len(faqs)} FAQs")
 
 
 def lookup(query: str) -> tuple[str | None, bool]:
@@ -70,13 +108,14 @@ def lookup(query: str) -> tuple[str | None, bool]:
 
 
 def store(query: str, answer: str) -> None:
-    """Store a question-answer pair in memory and persist to SQLite."""
+    """Store a question-answer pair in memory and persist to the active DB."""
     emb = _embed(query)
     _cache.append({"q": query, "a": answer, "emb": emb})
-    con = sqlite3.connect(CACHE_DB_PATH)
-    con.execute(
-        "INSERT INTO cache (question, answer, embedding) VALUES (?, ?, ?)",
-        (query, answer, emb.tobytes()),
+    con = _connect()
+    cur = con.cursor()
+    cur.execute(
+        f"INSERT INTO cache (question, answer, embedding) VALUES ({_PH}, {_PH}, {_PH})",
+        (query, answer, _binary(emb)),
     )
     con.commit()
     con.close()
