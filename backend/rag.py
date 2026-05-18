@@ -1,7 +1,7 @@
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
-from config import client, EMBEDDINGS_MODEL, RAG_URL, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
+from config import embeddings_client, EMBEDDINGS_MODEL, RAG_URL, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP
 
 # In-memory FAISS index — rebuilt on server start.
 # FAISS local: no account, no signup, no latency from external vector DB.
@@ -12,7 +12,7 @@ RAG_SIMILARITY_THRESHOLD = 0.75  # Lower than semantic cache — RAG needs wider
 
 
 def _embed(texts: list[str]) -> np.ndarray:
-    response = client.embeddings.create(model=EMBEDDINGS_MODEL, input=texts)
+    response = embeddings_client.embeddings.create(model=EMBEDDINGS_MODEL, input=texts)
     return np.array([r.embedding for r in response.data], dtype=np.float32)
 
 

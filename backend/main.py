@@ -37,7 +37,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import client, STT_MODEL, TTS_MODEL, TTS_VOICE
+from config import stt_client, tts_client, STT_MODEL, TTS_MODEL, TTS_VOICE
 import agent
 import cache
 import rag
@@ -133,7 +133,7 @@ async def transcribe(audio: UploadFile = File(...)):
 
     try:
         with open(tmp_path, "rb") as f:
-            transcript = client.audio.transcriptions.create(model=STT_MODEL, file=f)
+            transcript = stt_client.audio.transcriptions.create(model=STT_MODEL, file=f)
         return {"text": transcript.text}
     finally:
         os.unlink(tmp_path)
@@ -145,7 +145,7 @@ async def speak(req: SpeakRequest):
     Reto 03: Text-to-Speech via OpenAI TTS.
     Returns audio/mpeg binary stream.
     """
-    response = client.audio.speech.create(
+    response = tts_client.audio.speech.create(
         model=TTS_MODEL,
         voice=TTS_VOICE,
         input=req.text,

@@ -1,5 +1,5 @@
 import numpy as np
-from config import client, EMBEDDINGS_MODEL, SIMILARITY_THRESHOLD
+from config import embeddings_client, EMBEDDINGS_MODEL, SIMILARITY_THRESHOLD
 
 # In-memory semantic cache: list of {q, a, emb} dicts.
 # Pre-populated with 5 common FinBot FAQs to demonstrate cache hits from the start.
@@ -7,7 +7,7 @@ _cache: list[dict] = []
 
 
 def _embed(text: str) -> np.ndarray:
-    r = client.embeddings.create(model=EMBEDDINGS_MODEL, input=text)
+    r = embeddings_client.embeddings.create(model=EMBEDDINGS_MODEL, input=text)
     return np.array(r.data[0].embedding, dtype=np.float32)
 
 

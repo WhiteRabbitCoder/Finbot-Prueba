@@ -1,4 +1,4 @@
-from config import client, MODEL, VISION_MODEL
+from config import llm_client, vision_client, MODEL, VISION_MODEL
 from tools import TOOLS_SCHEMA, execute_tool
 import json
 
@@ -50,9 +50,11 @@ def chat(user_msg: str, image_b64: str | None = None) -> tuple[str, str | None]:
 
     tool_used: str | None = None
 
+    active_client = vision_client if image_b64 else llm_client
+
     # Tool calling loop — iterate until no more tool_calls in the response
     while True:
-        response = client.chat.completions.create(
+        response = active_client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": SYSTEM_PROMPT}] + _messages,
             tools=TOOLS_SCHEMA,
