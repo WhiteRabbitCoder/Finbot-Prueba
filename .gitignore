@@ -26,6 +26,8 @@ frontend/.env
 *.swo
 .DS_Store
 
-# FAISS index (rebuilt on startup)
+# Runtime persistence files (generated on first run)
 *.faiss
 *.index
+*.db
+faiss_chunks.json

@@ -40,3 +40,8 @@ RAG_CHUNK_SIZE   = int(os.getenv("RAG_CHUNK_SIZE",   "500"))
 RAG_CHUNK_OVERLAP= int(os.getenv("RAG_CHUNK_OVERLAP", "80"))
 
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.90"))
+
+# Persistence paths
+CACHE_DB_PATH     = os.getenv("CACHE_DB_PATH",     "cache.db")
+FAISS_INDEX_PATH  = os.getenv("FAISS_INDEX_PATH",  "faiss.index")
+FAISS_CHUNKS_PATH = os.getenv("FAISS_CHUNKS_PATH", "faiss_chunks.json")

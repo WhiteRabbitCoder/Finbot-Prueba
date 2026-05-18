@@ -49,13 +49,15 @@ import rag
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: pre-populate semantic cache and ingest RAG content
+    # Startup: pre-populate semantic cache (skipped if DB already has entries)
     cache.prepopulate(lambda q: "")
-    try:
-        n = rag.ingest()
-        print(f"[RAG] Indexed {n} chunks from {rag.RAG_URL}")
-    except Exception as e:
-        print(f"[RAG] Ingest skipped: {e}")
+    # RAG: only ingest if index wasn't loaded from disk
+    if rag._index is None:
+        try:
+            n = rag.ingest()
+            print(f"[RAG] Indexed {n} chunks from {rag.RAG_URL}")
+        except Exception as e:
+            print(f"[RAG] Ingest skipped: {e}")
     yield
     # Shutdown: nothing to clean up
 
