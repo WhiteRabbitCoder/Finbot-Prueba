@@ -27,59 +27,60 @@ function ToolStepItem({ step }: ToolStepItemProps) {
 
 interface VoiceNoteProps {
   content: string
+  audioUrl?: string
   showTimestamp?: boolean
   timestamp?: Date
   lang: Lang
 }
 
-const WAVEFORM_HEIGHTS = [8, 16, 24, 18, 28, 12, 22, 30, 14, 20, 10, 26, 16, 8]
+const WAVEFORM_HEIGHTS = [30, 55, 80, 60, 90, 40, 70, 100, 45, 65, 35, 85, 55, 30]
 
-function VoiceNote({ content, showTimestamp, timestamp, lang }: VoiceNoteProps) {
+function VoiceNote({ content, audioUrl, showTimestamp, timestamp, lang }: VoiceNoteProps) {
   const t = translations[lang]
   const [isPlaying, setIsPlaying] = useState(false)
   const [progress, setProgress] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
   const [showTranscript, setShowTranscript] = useState(false)
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  const duration = 4
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
-    if (isPlaying) {
-      const startTime = Date.now() - (progress * duration * 1000)
-      intervalRef.current = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000
-        const newProgress = Math.min(elapsed / duration, 1)
-        setProgress(newProgress)
-        setCurrentTime(Math.min(Math.floor(elapsed), duration))
-        
-        if (newProgress >= 1) {
-          setIsPlaying(false)
-          setProgress(0)
-          setCurrentTime(0)
-          if (intervalRef.current) clearInterval(intervalRef.current)
-        }
-      }, 100)
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
+    if (!audioUrl) return
+    const audio = new Audio(audioUrl)
+    audioRef.current = audio
 
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+    audio.onloadedmetadata = () => setDuration(Math.ceil(audio.duration))
+    audio.ontimeupdate = () => {
+      setCurrentTime(Math.floor(audio.currentTime))
+      setProgress(audio.duration > 0 ? audio.currentTime / audio.duration : 0)
     }
-  }, [isPlaying, progress])
-
-  const togglePlay = () => {
-    if (progress >= 1) {
+    audio.onended = () => {
+      setIsPlaying(false)
       setProgress(0)
       setCurrentTime(0)
     }
-    setIsPlaying(!isPlaying)
+
+    return () => {
+      audio.pause()
+      audio.src = ''
+      audioRef.current = null
+    }
+  }, [audioUrl])
+
+  const togglePlay = () => {
+    const audio = audioRef.current
+    if (!audio) return
+    if (isPlaying) {
+      audio.pause()
+      setIsPlaying(false)
+    } else {
+      if (progress >= 1) audio.currentTime = 0
+      audio.play()
+      setIsPlaying(true)
+    }
   }
 
-  const formatTime = (seconds: number) => {
-    return `0:${seconds.toString().padStart(2, '0')}`
-  }
+  const formatTime = (seconds: number) => `0:${seconds.toString().padStart(2, '0')}`
 
   return (
     <div className="flex flex-col gap-1">
@@ -88,7 +89,8 @@ function VoiceNote({ content, showTimestamp, timestamp, lang }: VoiceNoteProps) 
           {/* Play button */}
           <button
             onClick={togglePlay}
-            className="w-8 h-8 rounded-full bg-leaf flex items-center justify-center flex-shrink-0 hover:opacity-90 transition-opacity"
+            disabled={!audioUrl}
+            className="w-8 h-8 rounded-full bg-leaf flex items-center justify-center flex-shrink-0 hover:opacity-90 transition-opacity disabled:opacity-40"
           >
             {isPlaying ? (
               <svg viewBox="0 0 24 24" fill="white" className="w-3.5 h-3.5">
@@ -103,35 +105,33 @@ function VoiceNote({ content, showTimestamp, timestamp, lang }: VoiceNoteProps) 
           </button>
 
           {/* Waveform */}
-          <div className="relative flex items-center gap-0.5 flex-1 h-8">
+          <div className="relative flex items-center gap-[2px] flex-1 h-8 overflow-hidden">
+            {/* Progress overlay — rendered first so bars sit on top */}
+            <div
+              className="absolute inset-0 bg-leaf/15 transition-all duration-100 rounded-sm pointer-events-none"
+              style={{ width: `${progress * 100}%` }}
+            />
             {WAVEFORM_HEIGHTS.map((height, i) => (
               <div
                 key={i}
-                className="w-[3px] rounded-sm bg-leaf transition-transform"
+                className={`flex-1 rounded-sm bg-leaf ${isPlaying ? 'animate-waveform-bar' : ''}`}
                 style={{
-                  height: `${height}px`,
-                  opacity: isPlaying ? 1 : 0.5,
-                  animation: isPlaying 
-                    ? `waveform 0.8s ease-in-out infinite` 
-                    : 'none',
-                  animationDelay: isPlaying ? `${i * 7}ms` : '0ms',
+                  height: `${height}%`,
+                  opacity: isPlaying ? 1 : 0.45,
+                  animationDelay: `${i * 45}ms`,
                 }}
               />
             ))}
-            <div 
-              className="absolute inset-y-0 left-0 bg-leaf/20 transition-all duration-100"
-              style={{ width: `${progress * 100}%` }}
-            />
           </div>
 
           {/* Duration */}
-          <span className="font-mono text-xs text-ink-muted flex-shrink-0">
+          <span className="font-mono text-xs text-ink-muted flex-shrink-0 w-8 text-right">
             {isPlaying ? formatTime(currentTime) : formatTime(duration)}
           </span>
         </div>
 
         {/* Transcript expansion */}
-        <div 
+        <div
           className="overflow-hidden transition-all duration-300 ease-in-out"
           style={{ maxHeight: showTranscript ? '200px' : '0px' }}
         >
@@ -233,8 +233,9 @@ export function ChatMessages({ messages, isTyping, showTimestamps, userName, act
             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}
           >
             {message.role === 'agent' && message.isVoiceNote ? (
-              <VoiceNote 
-                content={message.content} 
+              <VoiceNote
+                content={message.content}
+                audioUrl={message.audioUrl}
                 showTimestamp={showTimestamps}
                 timestamp={message.timestamp}
                 lang={lang}

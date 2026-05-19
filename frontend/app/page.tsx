@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Message, InputMode, OutputMode, Theme, Settings, View, AuthUser, ToolStep, defaultSettings, themeClasses } from '@/lib/types'
-import { sendChatMessage, checkBackendHealth, clearToken } from '@/lib/api'
+import { Message, InputMode, OutputMode, Theme, Settings, View, AuthUser, defaultSettings, themeClasses } from '@/lib/types'
+import { sendChatMessage, speakText, checkBackendHealth, clearToken } from '@/lib/api'
 import { LoginScreen } from '@/components/login-screen'
 import { Onboarding } from '@/components/onboarding'
 import { ChatHeader } from '@/components/chat/chat-header'
@@ -17,59 +17,6 @@ function generateId() {
   return Math.random().toString(36).substring(2, 9)
 }
 
-// Tool step chains based on message content
-function getToolStepsForMessage(content: string, hasImage: boolean): { label: string }[] {
-  const lowerContent = content.toLowerCase()
-  
-  if (hasImage) {
-    return [
-      { label: 'Procesando imagen...' },
-      { label: 'Ejecutando analyze_receipt...' },
-    ]
-  }
-  
-  if (/dolar|tasa|cambio|usd|cop/i.test(lowerContent)) {
-    return [
-      { label: 'Consultando tipo de cambio USD/COP...' },
-      { label: 'Procesando respuesta...' },
-    ]
-  }
-  
-  if (/noticia|economia|mercado|inflacion/i.test(lowerContent)) {
-    return [
-      { label: 'Buscando noticias economicas...' },
-      { label: 'Filtrando por relevancia...' },
-      { label: 'Generando resumen...' },
-    ]
-  }
-  
-  return [
-    { label: 'Pensando...' },
-  ]
-}
-
-// Generate mock response based on message content
-function getMockResponse(content: string, hasImage: boolean): string {
-  const lowerContent = content.toLowerCase()
-  
-  if (hasImage) {
-    return 'He analizado tu recibo. Parece ser un gasto en la categoria de alimentacion por un total de $45.000 COP. Te recomiendo registrarlo en tu presupuesto mensual.'
-  }
-  
-  if (/dolar|tasa|cambio|usd|cop/i.test(lowerContent)) {
-    return 'El dolar hoy se cotiza a $4.089 COP para compra y $4.110 COP para venta. Ha subido un 0.28% respecto al cierre de ayer debido a tensiones en los mercados internacionales.'
-  }
-  
-  if (/noticia|economia|mercado|inflacion/i.test(lowerContent)) {
-    return 'Segun las ultimas noticias economicas, el Banco de la Republica mantuvo su tasa de interes en 9.75%. La inflacion en Colombia bajo a 5.8% en abril, lo que podria indicar una tendencia positiva para tu poder adquisitivo en los proximos meses.'
-  }
-  
-  if (/analiza esta noticia/i.test(lowerContent)) {
-    return 'Esta noticia puede tener un impacto directo en tus finanzas personales. Te recomiendo estar atento a los movimientos del mercado en los proximos dias y considerar diversificar tus inversiones si aun no lo has hecho.'
-  }
-  
-  return 'Gracias por tu pregunta. Como tu asistente financiero, estoy aqui para ayudarte con consultas sobre tasas de cambio, noticias economicas, analisis de gastos y consejos para mejorar tu salud financiera.'
-}
 
 export default function FinBot() {
   // Auth state
@@ -88,7 +35,6 @@ export default function FinBot() {
   const [outputMode, setOutputMode] = useState<OutputMode>('text')
   const [isTyping, setIsTyping] = useState(false)
   const [backendAvailable, setBackendAvailable] = useState(false)
-  const [activeToolSteps, setActiveToolSteps] = useState<ToolStep[]>([])
   const [prefillInput, setPrefillInput] = useState('')
 
   // UI state
@@ -235,7 +181,6 @@ export default function FinBot() {
   const handleSendMessage = useCallback(async (content: string, imageB64?: string) => {
     if (!content.trim() && !imageB64) return
 
-    // Add user message
     const userMessage: Message = {
       id: generateId(),
       role: 'user',
@@ -246,62 +191,34 @@ export default function FinBot() {
     setMessages(prev => [...prev, userMessage])
     setIsTyping(true)
 
-    // Get tool steps for this message
-    const toolStepTemplates = getToolStepsForMessage(content, !!imageB64)
-    const completedToolSteps: ToolStep[] = []
-
     try {
-      // Animate tool steps
-      for (let i = 0; i < toolStepTemplates.length; i++) {
-        const step: ToolStep = {
-          id: generateId(),
-          label: toolStepTemplates[i].label,
-          done: false,
-        }
-        
-        setActiveToolSteps(prev => [...prev, step])
-        
-        // Wait for step to "complete"
-        await new Promise(resolve => setTimeout(resolve, 800))
-        
-        // Mark step as done
-        setActiveToolSteps(prev => 
-          prev.map(s => s.id === step.id ? { ...s, done: true } : s)
-        )
-        
-        completedToolSteps.push({ ...step, done: true })
-        
-        // Small gap between steps
-        await new Promise(resolve => setTimeout(resolve, 200))
-      }
-
-      // Clear active steps before showing response
-      setActiveToolSteps([])
-
-      // Get response
       const response = await sendChatMessage(content, imageB64)
-      const mockResponse = getMockResponse(content, !!imageB64)
+
+      let audioUrl: string | undefined
+      if (outputMode === 'audio') {
+        const blob = await speakText(response.reply)
+        if (blob) audioUrl = URL.createObjectURL(blob)
+      }
 
       const agentMessage: Message = {
         id: generateId(),
         role: 'agent',
-        content: response.reply || mockResponse,
+        content: response.reply,
         toolUsed: response.tool_used,
         fromCache: response.from_cache,
         hasImage: !!imageB64,
         timestamp: new Date(),
-        toolSteps: completedToolSteps,
         isVoiceNote: outputMode === 'audio',
+        audioUrl,
       }
       setMessages(prev => [...prev, agentMessage])
-    } catch {
-      setActiveToolSteps([])
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Error desconocido'
       const errorMessage: Message = {
         id: generateId(),
         role: 'agent',
-        content: 'Algo salio mal. Intenta de nuevo.',
+        content: `Error: ${detail}`,
         timestamp: new Date(),
-        toolSteps: completedToolSteps,
       }
       setMessages(prev => [...prev, errorMessage])
     } finally {
@@ -383,7 +300,7 @@ export default function FinBot() {
             isTyping={isTyping}
             showTimestamps={settings.showTimestamps}
             userName={userName}
-            activeToolSteps={activeToolSteps}
+            activeToolSteps={[]}
           />
           <ChatInput
             inputMode={inputMode}

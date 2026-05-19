@@ -30,6 +30,7 @@ export interface Message {
   timestamp: Date
   toolSteps?: ToolStep[]
   isVoiceNote?: boolean
+  audioUrl?: string
 }
 
 export interface Settings {
@@ -74,6 +75,20 @@ export interface EnvConfig {
   SIMILARITY_THRESHOLD: number
   RAG_CHUNK_SIZE: number
   RAG_CHUNK_OVERLAP: number
+}
+
+export interface HealthStatus {
+  status: string
+  rag_chunks: number
+  cache_entries: number
+  redis_connected: boolean
+  models: {
+    llm: string
+    vision: string
+    stt: string
+    tts: string
+  }
+  tools_active: number
 }
 
 export interface ExchangeRates {

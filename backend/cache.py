@@ -25,6 +25,10 @@ def _use_redis() -> bool:
     return _redis is not None
 
 
+def is_redis_connected() -> bool:
+    return _redis is not None
+
+
 def _create_index() -> None:
     from redis.commands.search.field import VectorField, TextField
     from redis.commands.search.index_definition import IndexDefinition, IndexType
@@ -54,11 +58,15 @@ def init() -> None:
         print("[Cache] No REDIS_URL — using in-memory fallback")
         return
     import redis
-    _redis = redis.from_url(REDIS_URL, decode_responses=False)
-    _redis.ping()
-    _create_index()
-    backend = REDIS_URL.split("@")[-1].split("/")[0] if "@" in REDIS_URL else REDIS_URL
-    print(f"[Cache] Connected to Redis ({backend})")
+    try:
+        _redis = redis.from_url(REDIS_URL, decode_responses=False)
+        _redis.ping()
+        _create_index()
+        backend = REDIS_URL.split("@")[-1].split("/")[0] if "@" in REDIS_URL else REDIS_URL
+        print(f"[Cache] Connected to Redis ({backend})")
+    except Exception as e:
+        _redis = None
+        print(f"[Cache] Redis unavailable ({e}) — using in-memory fallback")
 
 
 def lookup(query: str) -> tuple[str | None, bool]:

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+cache.db
+*.index
+faiss_chunks.json
+openapi.yaml
+export_openapi.py

@@ -54,6 +54,11 @@ async def lifespan(app: FastAPI):
     auth.init_users_table()
     auth.seed_admin()
     analytics.init_analytics_tables()
+    analytics.init_agent_config_table()
+    stored_prompt = analytics.load_config_value("system_prompt")
+    if stored_prompt:
+        agent.set_system_prompt(stored_prompt)
+        print("[Agent] System prompt loaded from DB")
     cache.init()
     cache.prepopulate()
     rag.init_tables()
@@ -107,6 +112,12 @@ class RagReindexRequest(BaseModel):
 
 class RagDeleteRequest(BaseModel):
     url: str
+
+class PromptRequest(BaseModel):
+    prompt: str
+
+class ToolToggleRequest(BaseModel):
+    enabled: bool
 
 
 # ── Endpoints ─────────────────────────────────────────────────
@@ -223,7 +234,21 @@ async def reset(current_user: dict = Depends(auth.get_current_user)):
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "rag_chunks": rag.chunk_count(), "cache_entries": cache.count()}
+    from config import MODEL, VISION_MODEL, STT_MODEL, TTS_MODEL
+    active_tools = [t for t in agent.get_tools_status() if t["enabled"]]
+    return {
+        "status": "ok",
+        "rag_chunks": rag.chunk_count(),
+        "cache_entries": cache.count(),
+        "redis_connected": cache.is_redis_connected(),
+        "models": {
+            "llm": MODEL,
+            "vision": VISION_MODEL,
+            "stt": STT_MODEL,
+            "tts": TTS_MODEL,
+        },
+        "tools_active": len(active_tools),
+    }
 
 
 # ── Admin endpoints (require admin role) ──────────────────────
@@ -309,6 +334,37 @@ async def admin_rag_delete(req: RagDeleteRequest, current_user: dict = Depends(a
 async def admin_cache_clear(current_user: dict = Depends(auth.require_admin)):
     """Truncate the semantic cache (memory + DB)."""
     cache.clear()
+    return {"ok": True}
+
+
+@app.get("/admin/prompt", tags=["admin"])
+async def admin_get_prompt(current_user: dict = Depends(auth.require_admin)):
+    """Return the current system prompt."""
+    return {"prompt": agent.get_system_prompt()}
+
+
+@app.post("/admin/prompt", tags=["admin"])
+async def admin_set_prompt(req: PromptRequest, current_user: dict = Depends(auth.require_admin)):
+    """Update the agent system prompt in memory and persist to DB (survives restarts)."""
+    agent.set_system_prompt(req.prompt)
+    analytics.save_config_value("system_prompt", req.prompt)
+    return {"ok": True}
+
+
+@app.get("/admin/tools", tags=["admin"])
+async def admin_get_tools(current_user: dict = Depends(auth.require_admin)):
+    """List all tools with their enabled/disabled status."""
+    return {"tools": agent.get_tools_status()}
+
+
+@app.post("/admin/tools/{tool_id}", tags=["admin"])
+async def admin_set_tool(
+    tool_id: str,
+    req: ToolToggleRequest,
+    current_user: dict = Depends(auth.require_admin),
+):
+    """Enable or disable a specific tool. Takes effect on the next chat request."""
+    agent.set_tool_enabled(tool_id, req.enabled)
     return {"ok": True}
 
 

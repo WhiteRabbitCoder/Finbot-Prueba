@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { InputMode, OutputMode } from '@/lib/types'
+import { transcribeAudio } from '@/lib/api'
 
 interface ChatInputProps {
   inputMode: InputMode
@@ -26,12 +27,15 @@ export function ChatInput({
 }: ChatInputProps) {
   const [text, setText] = useState('')
   const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [transcriptionError, setTranscriptionError] = useState('')
   const [transcription, setTranscription] = useState('')
   const [selectedImage, setSelectedImage] = useState<{ file: File; preview: string } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const cancelledRef = useRef(false)
 
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current
@@ -103,26 +107,46 @@ export function ChatInput({
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream)
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/ogg'
+      const mediaRecorder = new MediaRecorder(stream, { mimeType })
       mediaRecorderRef.current = mediaRecorder
       audioChunksRef.current = []
+      cancelledRef.current = false
 
       mediaRecorder.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data)
+        if (event.data.size > 0) audioChunksRef.current.push(event.data)
       }
 
-      mediaRecorder.onstop = () => {
-        // Mock transcription
-        setTimeout(() => {
-          setTranscription('Esta es una transcripcion de prueba del mensaje de voz.')
-        }, 500)
+      mediaRecorder.onstop = async () => {
         stream.getTracks().forEach(track => track.stop())
+        if (cancelledRef.current) return
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
+        if (audioBlob.size === 0) {
+          setTranscriptionError('No se capturó audio. Inténtalo de nuevo.')
+          return
+        }
+
+        setIsTranscribing(true)
+        setTranscriptionError('')
+        try {
+          const result = await transcribeAudio(audioBlob)
+          setTranscription(result.text)
+        } catch (err) {
+          setTranscriptionError(err instanceof Error ? err.message : 'Error al transcribir')
+        } finally {
+          setIsTranscribing(false)
+        }
       }
 
-      mediaRecorder.start()
+      mediaRecorder.start(250)
       setIsRecording(true)
     } catch (error) {
-      console.log('[v0] Error accessing microphone:', error)
+      console.error('Error al acceder al micrófono:', error)
     }
   }
 
@@ -134,11 +158,11 @@ export function ChatInput({
   }
 
   const cancelRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop()
-    }
+    cancelledRef.current = true
+    if (mediaRecorderRef.current) mediaRecorderRef.current.stop()
     setIsRecording(false)
     setTranscription('')
+    setTranscriptionError('')
     audioChunksRef.current = []
   }
 
@@ -281,7 +305,28 @@ export function ChatInput({
               </div>
             )}
 
-            {transcription && (
+            {isTranscribing && (
+              <div className="flex flex-col items-center gap-2 py-2">
+                <div className="w-6 h-6 border-2 border-rule border-t-leaf rounded-full animate-spin" />
+                <p className="text-sm text-ink-muted">Transcribiendo...</p>
+              </div>
+            )}
+
+            {!isTranscribing && transcriptionError && (
+              <div className="space-y-3">
+                <p className="text-sm text-ember text-center">{transcriptionError}</p>
+                <div className="flex justify-center">
+                  <button
+                    onClick={() => { setTranscriptionError(''); audioChunksRef.current = [] }}
+                    className="text-sm text-ink-muted hover:text-ink"
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isTranscribing && !transcriptionError && transcription && (
               <div className="space-y-3">
                 <p className="text-sm text-ink bg-card rounded-lg p-3">{transcription}</p>
                 <div className="flex justify-center gap-4">

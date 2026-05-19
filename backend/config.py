@@ -35,7 +35,7 @@ TTS_MODEL        = os.getenv("TTS_MODEL",         "tts-1")
 TTS_VOICE        = os.getenv("TTS_VOICE",         "nova")
 
 # RAG
-RAG_URL          = os.getenv("RAG_URL", "https://ayuda.nequi.com.co/preguntas-frecuentes")
+RAG_URL          = os.getenv("RAG_URL", "https://ayuda.nequi.com.co/hc/es")
 RAG_CHUNK_SIZE   = int(os.getenv("RAG_CHUNK_SIZE",   "500"))
 RAG_CHUNK_OVERLAP= int(os.getenv("RAG_CHUNK_OVERLAP", "80"))
 

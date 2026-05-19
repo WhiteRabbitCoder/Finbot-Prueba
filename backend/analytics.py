@@ -9,6 +9,42 @@ def _connect():
     return psycopg2.connect(DATABASE_URL)
 
 
+def init_agent_config_table() -> None:
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS agent_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def load_config_value(key: str) -> str | None:
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("SELECT value FROM agent_config WHERE key = %s", (key,))
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def save_config_value(key: str, value: str) -> None:
+    con = _connect()
+    cur = con.cursor()
+    cur.execute(
+        """
+        INSERT INTO agent_config (key, value) VALUES (%s, %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (key, value),
+    )
+    con.commit()
+    con.close()
+
+
 def init_analytics_tables() -> None:
     con = _connect()
     cur = con.cursor()

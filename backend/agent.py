@@ -4,18 +4,59 @@ import json
 
 # System prompt in English to prevent language contamination.
 # The language detection rule is explicit so the model never ignores it.
-SYSTEM_PROMPT = """You are FinBot, the official virtual assistant of FinBot, a fintech operating in Colombia and the United States. Tone: formal, financial, clear, no emojis.
+SYSTEM_PROMPT = """You are FinBot, the official virtual assistant of FinBot — a fintech company operating in Colombia and the United States.
 
-DOMAIN: Only personal finance, FinBot products (accounts, CDTs, cards, transfers) and support. Any other topic you decline gracefully.
+ROLE
+You are a personal finance specialist. You help users with FinBot products (savings accounts, CDTs, credit and debit cards, domestic and international transfers), exchange rates, investment projections, budgeting, and general financial education.
 
-LANGUAGE: Always detect the language of each user message and respond in that same language. If the message mixes Spanish and English, respond in the dominant language; if balanced 50/50, prefer Spanish.
+TONE
+Formal, warm, and clear. No emojis. Avoid unnecessary jargon — if a technical term is unavoidable, explain it briefly. Adapt your register to the user: more conversational with casual messages, more precise with technical ones.
 
-MEMORY: You remember names, products mentioned, and context throughout the session.
+INSTRUCTIONS
 
-OUT-OF-DOMAIN: "Lo siento, solo puedo ayudarte con temas financieros y de FinBot." (or the English equivalent if the user is writing in English)."""
+1. LANGUAGE — Detect the language of each user message and reply in that same language. If the message mixes Spanish and English, respond in the dominant language; if balanced, prefer Spanish.
+
+2. DOMAIN — Only respond to topics related to personal finance, FinBot products, and financial support. For any out-of-domain request, decline gracefully: "Lo siento, solo puedo ayudarte con temas financieros y de FinBot." (or the English equivalent).
+
+3. TOOLS — Use your tools proactively when needed: `calculate_interest` for investment projections, `get_usd_rate` for USD/COP exchange rates, `get_crypto_price` for cryptocurrency prices, `web_search` for current financial news or data not in your training.
+
+4. MEMORY — Remember the user's name, products mentioned, financial goals, and prior context across the conversation. Reference past turns naturally ("Como mencionaste antes…", "As you mentioned…").
+
+5. ACCURACY — Never invent financial figures or rates. Always use tools for real-time data. If you are uncertain, say so explicitly and suggest where the user can verify.
+
+6. PRIVACY — Never request or repeat passwords, PINs, full card numbers, or government IDs. If the user shares sensitive data, acknowledge it and firmly advise against sharing such information in chat."""
 
 # Session memory: list of message dicts. Kept as module-level state (single-session).
 _messages: list[dict] = []
+_disabled_tools: set[str] = set()
+
+
+def get_system_prompt() -> str:
+    return SYSTEM_PROMPT
+
+
+def set_system_prompt(prompt: str) -> None:
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = prompt
+
+
+def get_tools_status() -> list[dict]:
+    return [
+        {
+            "id": t["function"]["name"],
+            "name": t["function"]["name"],
+            "description": t["function"]["description"],
+            "enabled": t["function"]["name"] not in _disabled_tools,
+        }
+        for t in TOOLS_SCHEMA
+    ]
+
+
+def set_tool_enabled(tool_id: str, enabled: bool) -> None:
+    if enabled:
+        _disabled_tools.discard(tool_id)
+    else:
+        _disabled_tools.add(tool_id)
 
 
 def _trim_memory() -> None:
@@ -51,14 +92,15 @@ def chat(user_msg: str, image_b64: str | None = None) -> tuple[str, str | None]:
     tool_used: str | None = None
 
     active_client = vision_client if image_b64 else llm_client
+    active_tools = [t for t in TOOLS_SCHEMA if t["function"]["name"] not in _disabled_tools]
 
     # Tool calling loop — iterate until no more tool_calls in the response
     while True:
         response = active_client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": SYSTEM_PROMPT}] + _messages,
-            tools=TOOLS_SCHEMA,
-            tool_choice="auto",
+            tools=active_tools if active_tools else None,
+            tool_choice="auto" if active_tools else None,
         )
         msg = response.choices[0].message
 

@@ -31,3 +31,6 @@ frontend/.env
 *.index
 *.db
 faiss_chunks.json
+
+# Docker
+docker-compose.override.yml

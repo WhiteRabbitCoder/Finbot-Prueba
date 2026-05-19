@@ -264,8 +264,12 @@
 
 /* Waveform animation for voice notes */
 @keyframes waveform {
-  0%, 100% { transform: scaleY(1); }
-  50% { transform: scaleY(1.8); }
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.animate-waveform-bar {
+  transform-origin: center;
+  animation: waveform 0.9s ease-in-out infinite;
 }
 
 /* Scrollbar styling */

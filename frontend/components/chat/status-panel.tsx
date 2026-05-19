@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { SidebarTab, NewsItem } from '@/lib/types'
+import { useState, useEffect, useRef } from 'react'
+import { SidebarTab, NewsItem, HealthStatus } from '@/lib/types'
+import { getHealthStatus } from '@/lib/api'
 import { Lang, translations, newsES, newsEN } from '@/lib/translations'
 
 interface StatusPanelProps {
@@ -14,31 +15,8 @@ interface StatusPanelProps {
 interface ModuleStatus {
   name: string
   status: 'active' | 'loading' | 'off'
-  detailKey: string
+  detail: string
 }
-
-interface ActivityLog {
-  id: string
-  type: 'cache' | 'tool'
-  message: string
-  timestamp: Date
-}
-
-const mockModules: ModuleStatus[] = [
-  { name: 'RAG', status: 'active', detailKey: 'module_rag' },
-  { name: 'Cache', status: 'active', detailKey: 'module_cache' },
-  { name: 'Voz', status: 'active', detailKey: 'module_voz' },
-  { name: 'Vision', status: 'off', detailKey: 'module_vision' },
-  { name: 'Tools', status: 'active', detailKey: 'module_tools' },
-]
-
-const initialActivity: ActivityLog[] = [
-  { id: '1', type: 'cache', message: 'Cache hit - "horario de atencion"', timestamp: new Date(Date.now() - 60000) },
-  { id: '2', type: 'tool', message: 'get_usd_rate - $1 = $4.089 COP', timestamp: new Date(Date.now() - 120000) },
-  { id: '3', type: 'cache', message: 'Cache miss - "consulta saldo"', timestamp: new Date(Date.now() - 180000) },
-  { id: '4', type: 'tool', message: 'get_account_balance - OK', timestamp: new Date(Date.now() - 240000) },
-  { id: '5', type: 'cache', message: 'Cache hit - "transferencia"', timestamp: new Date(Date.now() - 300000) },
-]
 
 const CURRENCY_PAIRS = ['COP', 'EUR', 'BRL', 'MXN', 'PEN', 'ARS']
 
@@ -55,48 +33,82 @@ interface SistemaTabProps {
   lang: Lang
 }
 
+function buildModules(health: HealthStatus | null, lang: Lang): ModuleStatus[] {
+  const t = translations[lang]
+  if (!health) {
+    return [
+      { name: 'RAG', status: 'loading', detail: '...' },
+      { name: 'Cache', status: 'loading', detail: '...' },
+      { name: 'Voz', status: 'loading', detail: '...' },
+      { name: 'Vision', status: 'loading', detail: '...' },
+      { name: 'Tools', status: 'loading', detail: '...' },
+    ]
+  }
+  const cacheDetail = health.redis_connected
+    ? `${health.cache_entries} ${t.entries} · Redis`
+    : `${health.cache_entries} ${t.entries} · ${t.in_memory}`
+  return [
+    {
+      name: 'RAG',
+      status: health.rag_chunks > 0 ? 'active' : 'off',
+      detail: health.rag_chunks > 0
+        ? `${health.rag_chunks} ${t.chunks_indexed}`
+        : t.no_chunks,
+    },
+    {
+      name: 'Cache',
+      status: 'active',
+      detail: cacheDetail,
+    },
+    {
+      name: 'Voz',
+      status: 'active',
+      detail: health.models.stt,
+    },
+    {
+      name: 'Vision',
+      status: 'active',
+      detail: health.models.vision,
+    },
+    {
+      name: 'Tools',
+      status: health.tools_active > 0 ? 'active' : 'off',
+      detail: `${health.tools_active} ${t.active_tools}`,
+    },
+  ]
+}
+
 function SistemaTab({ lang }: SistemaTabProps) {
   const t = translations[lang]
+  const [health, setHealth] = useState<HealthStatus | null>(null)
+
+  useEffect(() => {
+    getHealthStatus().then(setHealth)
+    const interval = setInterval(() => getHealthStatus().then(setHealth), 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const modules = buildModules(health, lang)
 
   return (
     <div className="animate-fade-in">
-      {/* Modules - no card wrappers, just rows with bottom border */}
       <div className="divide-y divide-rule">
-        {mockModules.map(module => (
+        {modules.map(module => (
           <div key={module.name} className="flex items-center gap-3 px-4 py-3">
             <StatusDot status={module.status} />
             <div className="flex-1 min-w-0">
               <p className="text-sm text-ink font-medium">{module.name}</p>
-              <p className="text-xs text-ink-muted truncate">
-                {t[module.detailKey as keyof typeof t]}
-              </p>
+              <p className="text-xs text-ink-muted truncate">{module.detail}</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Activity log */}
-      <div className="flex-1 px-4 py-4">
-        <h4 className="text-xs font-medium text-ink-muted mb-3">{t.ultima_actividad}</h4>
-        <div className="space-y-2">
-          {initialActivity.map(log => (
-            <div key={log.id} className="text-xs text-ink-muted">
-              <span className="mr-1">
-                {log.type === 'cache' ? (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 inline">
-                    <polygon points="13,2 3,14 12,14 11,22 21,10 12,10" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3 h-3 inline">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                  </svg>
-                )}
-              </span>
-              {log.message}
-            </div>
-          ))}
+      {health && (
+        <div className="px-4 py-3 border-t border-rule">
+          <p className="text-xs text-ink-muted">{t.llm_model}: <span className="text-ink">{health.models.llm}</span></p>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -104,8 +116,7 @@ function SistemaTab({ lang }: SistemaTabProps) {
 interface CurrencyRate {
   pair: string
   rate: number
-  change: number
-  updatedMinutesAgo: number
+  change: number | null
 }
 
 interface MercadosTabProps {
@@ -119,24 +130,26 @@ function MercadosTab({ lang }: MercadosTabProps) {
   const [error, setError] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const prevRatesRef = useRef<Record<string, number>>({})
 
   const fetchRates = async () => {
     try {
       setRefreshing(true)
       const response = await fetch('https://open.er-api.com/v6/latest/USD')
       const data = await response.json()
-      
+
       if (data.result === 'success') {
         const newRates: CurrencyRate[] = CURRENCY_PAIRS.map(currency => {
-          const rate = currency === 'ARS' ? 1050.50 : data.rates[currency] || 0
-          const change = (Math.random() - 0.5) * 0.6
-          return {
-            pair: `USD / ${currency}`,
-            rate,
-            change,
-            updatedMinutesAgo: Math.floor(Math.random() * 10),
-          }
+          const rate: number = data.rates[currency] || 0
+          const prev = prevRatesRef.current[currency]
+          const change = prev != null && prev !== 0
+            ? ((rate - prev) / prev) * 100
+            : null
+          return { pair: `USD / ${currency}`, rate, change }
         })
+        prevRatesRef.current = Object.fromEntries(
+          CURRENCY_PAIRS.map(c => [c, data.rates[c] || 0])
+        )
         setRates(newRates)
         setLastUpdated(new Date())
         setError(false)
@@ -189,10 +202,6 @@ function MercadosTab({ lang }: MercadosTabProps) {
     )
   }
 
-  const formatMinAgo = (min: number) => {
-    return t.hace_min.replace('{x}', min.toString())
-  }
-
   return (
     <div className="p-4 animate-fade-in">
       {/* Header with refresh */}
@@ -222,10 +231,13 @@ function MercadosTab({ lang }: MercadosTabProps) {
               {rate.rate.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
             <div className="text-right w-20">
-              <p className={`text-xs font-medium ${rate.change >= 0 ? 'text-leaf' : 'text-ember'}`}>
-                {rate.change >= 0 ? '+' : ''}{rate.change.toFixed(2)}%
-              </p>
-              <p className="text-xs text-ink-muted">{formatMinAgo(rate.updatedMinutesAgo)}</p>
+              {rate.change != null ? (
+                <p className={`text-xs font-medium ${rate.change >= 0 ? 'text-leaf' : 'text-ember'}`}>
+                  {rate.change >= 0 ? '+' : ''}{rate.change.toFixed(3)}%
+                </p>
+              ) : (
+                <p className="text-xs text-ink-muted">—</p>
+              )}
             </div>
           </div>
         ))}

@@ -65,46 +65,32 @@ export async function sendChatMessage(message: string, imageB64?: string): Promi
   tool_used: string | null
   from_cache: boolean
 }> {
-  try {
-    const response = await authFetch(`${API_BASE}/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, image_b64: imageB64 }),
-    })
-    if (!response.ok) throw new Error('Network error')
-    return await response.json()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'SESSION_EXPIRED') throw error
-    // Mock response when backend is not available
-    const mockResponses = [
-      { reply: 'Entiendo tu consulta. Basado en la informacion disponible, te recomiendo revisar el estado de tu cuenta en la seccion de movimientos.', tool_used: null, from_cache: false },
-      { reply: 'El tipo de cambio actual del dolar es $1 USD = $4.089 COP. Este valor puede variar durante el dia.', tool_used: 'get_usd_rate', from_cache: false },
-      { reply: 'Esta respuesta fue recuperada del cache semantico para optimizar el tiempo de respuesta.', tool_used: null, from_cache: true },
-      { reply: 'He analizado la imagen que me enviaste. Parece ser un recibo de pago. El monto total es de $150.000 COP.', tool_used: 'analyze_receipt', from_cache: false },
-    ]
-    const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)]
-    if (imageB64) {
-      return { reply: 'He analizado la imagen que me enviaste. Puedo ver los detalles del documento.', tool_used: 'vision_analysis', from_cache: false }
-    }
-    return randomResponse
+  // Strip data URL prefix — backend builds the full data URI itself
+  const cleanImage = imageB64?.includes(',') ? imageB64.split(',')[1] : imageB64
+  const response = await authFetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, image_b64: cleanImage ?? null }),
+  })
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    throw new Error(detail?.detail ?? `HTTP ${response.status}`)
   }
+  return response.json()
 }
 
 export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string }> {
-  try {
-    const formData = new FormData()
-    formData.append('audio', audioBlob)
-    const response = await authFetch(`${API_BASE}/transcribe`, {
-      method: 'POST',
-      body: formData,
-    })
-    if (!response.ok) throw new Error('Network error')
-    return await response.json()
-  } catch (error) {
-    if (error instanceof Error && error.message === 'SESSION_EXPIRED') throw error
-    // Mock transcription
-    return { text: 'Esta es una transcripcion de prueba del mensaje de voz.' }
+  const formData = new FormData()
+  formData.append('audio', audioBlob, 'recording.webm')
+  const response = await authFetch(`${API_BASE}/transcribe`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => response.statusText)
+    throw new Error(detail || `HTTP ${response.status}`)
   }
+  return response.json()
 }
 
 export async function speakText(text: string): Promise<Blob | null> {
@@ -215,14 +201,54 @@ export async function getAnalytics(): Promise<{
   return r.json()
 }
 
-export async function checkBackendHealth(): Promise<boolean> {
+export async function getSystemPrompt(): Promise<string> {
+  const r = await authFetch(`${API_BASE}/admin/prompt`)
+  if (!r.ok) throw new Error('FETCH_FAILED')
+  return (await r.json()).prompt
+}
+
+export async function saveSystemPrompt(prompt: string): Promise<void> {
+  const r = await authFetch(`${API_BASE}/admin/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  if (!r.ok) throw new Error('SAVE_FAILED')
+}
+
+export async function getAdminTools(): Promise<Array<{
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+}>> {
+  const r = await authFetch(`${API_BASE}/admin/tools`)
+  if (!r.ok) throw new Error('FETCH_FAILED')
+  return (await r.json()).tools
+}
+
+export async function setToolEnabled(toolId: string, enabled: boolean): Promise<void> {
+  const r = await authFetch(`${API_BASE}/admin/tools/${toolId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!r.ok) throw new Error('TOGGLE_FAILED')
+}
+
+export async function getHealthStatus(): Promise<import('./types').HealthStatus | null> {
   try {
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 2000)
+    const timeoutId = setTimeout(() => controller.abort(), 3000)
     const response = await fetch(`${API_BASE}/health`, { signal: controller.signal })
     clearTimeout(timeoutId)
-    return response.ok
+    if (!response.ok) return null
+    return response.json()
   } catch {
-    return false
+    return null
   }
+}
+
+export async function checkBackendHealth(): Promise<boolean> {
+  return (await getHealthStatus()) !== null
 }
