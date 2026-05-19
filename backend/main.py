@@ -31,6 +31,7 @@ import base64
 import io
 import tempfile
 import os
+import time
 
 from contextlib import asynccontextmanager
 
@@ -46,6 +47,9 @@ import auth
 import cache
 import rag
 
+
+# ── State ─────────────────────────────────────────────────────
+NEWS_CACHE = {}
 
 # ── Lifespan ──────────────────────────────────────────────────
 
@@ -249,6 +253,37 @@ async def health():
         },
         "tools_active": len(active_tools),
     }
+
+
+@app.get("/news", tags=["system"])
+async def get_news(lang: str = "es"):
+    """Get live economic news, cached for 10 minutes per language."""
+    now = time.time()
+    if lang in NEWS_CACHE and (now - NEWS_CACHE[lang]["timestamp"] < 600):
+        return {"news": NEWS_CACHE[lang]["news"], "cached": True}
+        
+    query = "economía finanzas" if lang == "es" else "economy finance"
+    try:
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.news(query, max_results=5))
+            
+        formatted_news = []
+        for i, item in enumerate(results):
+            formatted_news.append({
+                "id": f"live-{time.time()}-{i}",
+                "source": item.get("source", "Noticias"),
+                "headline": item.get("title", ""),
+                "snippet": item.get("body", ""),
+                "timeAgo": item.get("date", "")[:16].replace("T", " ")
+            })
+            
+        NEWS_CACHE[lang] = {"timestamp": now, "news": formatted_news}
+        return {"news": formatted_news, "cached": False}
+    except Exception as e:
+        print(f"[News Error] {str(e)}")
+        # Allow the UI to elegantly fail or show an empty state, not a crash
+        return {"news": [], "cached": False, "error": str(e)}
 
 
 # ── Admin endpoints (require admin role) ──────────────────────

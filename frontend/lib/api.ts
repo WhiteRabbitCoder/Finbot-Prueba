@@ -252,3 +252,17 @@ export async function getHealthStatus(): Promise<import('./types').HealthStatus 
 export async function checkBackendHealth(): Promise<boolean> {
   return (await getHealthStatus()) !== null
 }
+
+export async function getLiveNews(lang: 'es' | 'en'): Promise<{ news: import('./types').NewsItem[], cached: boolean }> {
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 8000)
+    const response = await fetch(`${API_BASE}/news?lang=${lang}`, { signal: controller.signal })
+    clearTimeout(timeoutId)
+    if (!response.ok) throw new Error('Network error')
+    return await response.json()
+  } catch {
+    return { news: [], cached: false }
+  }
+}
+

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { SidebarTab, NewsItem, HealthStatus } from '@/lib/types'
-import { getHealthStatus } from '@/lib/api'
+import { getHealthStatus, getLiveNews } from '@/lib/api'
 import { Lang, translations, newsES, newsEN } from '@/lib/translations'
 
 interface StatusPanelProps {
@@ -263,50 +263,48 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
   const [news, setNews] = useState<NewsItem[]>([])
   const [clickedIds, setClickedIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  const fetchNews = async () => {
+    setLoading(true)
+    setError(false)
+    try {
+      const data = await getLiveNews(lang)
+      if (data && data.news && data.news.length > 0) {
+        setNews(data.news)
+      } else {
+        setError(true)
+      }
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const newsData = lang === 'es' ? newsES : newsEN
-      setNews(newsData.slice(0, 5).map(n => ({
-        id: n.id,
-        source: n.source,
-        headline: n.headline,
-        snippet: n.snippet,
-        timeAgo: n.timeAgo,
-      })))
-      setLoading(false)
-    }, 300)
-    return () => clearTimeout(timer)
+    fetchNews()
+    const interval = setInterval(fetchNews, 5 * 60 * 1000) // Refresh every 5 mins
+    return () => clearInterval(interval)
   }, [lang])
 
   const handleNewsClick = (item: NewsItem) => {
     setClickedIds(prev => new Set([...prev, item.id]))
-    const prefix = t.analyze_news
+    const prefix = t.analyze_news || 'Analiza esta noticia:'
     onNewsClick?.(`${prefix} "${item.headline}"`)
   }
 
-  const loadMore = () => {
-    const newsData = lang === 'es' ? newsES : newsEN
-    const additionalNews = newsData.slice(5).map(n => ({
-      id: `extra-${n.id}`,
-      source: n.source,
-      headline: n.headline,
-      snippet: n.snippet,
-      timeAgo: n.timeAgo,
-    }))
-    setNews(prev => [...prev, ...additionalNews])
-  }
-
-  if (loading) {
+  if (loading && news.length === 0) {
     return (
       <div className="p-4 space-y-0 animate-fade-in divide-y divide-rule">
-        {[1, 2, 3, 4].map(i => (
+        {[1, 2, 3, 4, 5].map(i => (
           <div key={i} className="py-3 animate-pulse">
             <div className="flex justify-between mb-2">
               <div className="h-3 bg-rule rounded w-16" />
               <div className="h-3 bg-rule rounded w-12" />
             </div>
             <div className="h-4 bg-rule rounded w-full mb-1" />
+            <div className="h-4 bg-rule rounded w-2/3 mb-2" />
             <div className="h-3 bg-rule rounded w-3/4" />
           </div>
         ))}
@@ -314,47 +312,82 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
     )
   }
 
+  if (error && news.length === 0) {
+    return (
+      <div className="p-4 text-center animate-fade-in flex flex-col items-center justify-center min-h-[300px]">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-8 h-8 text-ink-muted mb-3 opacity-50">
+          <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" />
+          <path d="M12 8V12L15 15" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <p className="text-sm text-ink-muted mb-4 opacity-75">
+          {lang === 'es' ? 'No se pudieron cargar las noticias en este momento.' : 'Live news unavailable at the moment.'}
+        </p>
+        <button
+          onClick={fetchNews}
+          className="px-5 py-2 bg-paper border border-rule text-ink text-sm rounded-lg hover:border-leaf hover:text-leaf transition-colors"
+        >
+          {lang === 'es' ? 'Reintentar conexión' : 'Retry Connection'}
+        </button>
+      </div>
+    )
+  }
+
   return (
-    <div className="p-4 animate-fade-in">
-      {/* Live indicator */}
-      <div className="flex items-center gap-2 mb-4">
-        <span className="font-serif text-sm text-ink">{t.economia_vivo}</span>
-        <div className="w-2 h-2 bg-ember rounded-full animate-pulse" />
+    <div className="p-4 animate-fade-in relative min-h-full pb-10">
+      {/* Live indicator header */}
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-2">
+          <span className="font-serif text-[15px] text-ink font-semibold tracking-tight">{t.economia_vivo}</span>
+          <div className="relative flex items-center justify-center ml-1">
+            <div className="w-2.5 h-2.5 bg-ember rounded-full animate-pulse shadow-[0_0_8px_rgba(255,87,87,0.7)]" />
+            <div className="absolute w-4 h-4 bg-ember/30 rounded-full animate-ping" />
+          </div>
+        </div>
+        <button
+          onClick={fetchNews}
+          disabled={loading}
+          className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-card transition-colors relative"
+        >
+          {loading && (
+            <div className="absolute top-1 right-1 w-1.5 h-1.5 bg-pot rounded-full pulse-animation" />
+          )}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`w-4 h-4 ${loading ? 'opacity-50' : ''}`}>
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
+          </svg>
+        </button>
       </div>
 
-      {/* News items - flat list with bottom border, left accent on hover */}
-      <div className="divide-y divide-rule">
+      {/* News list */}
+      <div className="flex flex-col gap-1">
         {news.map((item, index) => (
           <button
             key={item.id}
             onClick={() => handleNewsClick(item)}
-            className={`w-full text-left py-3 transition-all duration-150 animate-fade-in-up relative hover:pl-3 hover:border-l-[3px] hover:border-l-leaf hover:-ml-[3px] ${
-              clickedIds.has(item.id) ? 'opacity-70' : ''
-            }`}
-            style={{ animationDelay: `${index * 80}ms` }}
+            className={`w-full text-left p-3 rounded-xl transition-all duration-200 animate-fade-in-up relative border border-transparent 
+              hover:border-rule hover:bg-card/40 focus:outline-none focus:bg-card/50 focus:border-leaf/30
+              ${clickedIds.has(item.id) ? 'opacity-75' : ''}`}
+            style={{ animationDelay: `${index * 60}ms` }}
           >
             {clickedIds.has(item.id) && (
-              <div className="absolute top-3 right-0 w-2 h-2 bg-leaf rounded-full" />
+              <div className="absolute top-4 right-3 w-1.5 h-1.5 bg-leaf/40 rounded-full" />
             )}
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-pot uppercase">{item.source}</span>
-              <span className="text-xs text-ink-muted">{item.timeAgo}</span>
+            
+            <div className="flex items-end justify-between mb-2">
+              <span className="text-[11px] font-bold text-pot tracking-widest uppercase opacity-90">{item.source}</span>
+              <span className="text-[11px] font-medium text-ink-muted/80">{item.timeAgo}</span>
             </div>
-            <p className="text-xs font-medium text-ink leading-snug line-clamp-2 mb-1">{item.headline}</p>
-            <p className="text-xs text-ink-muted line-clamp-1">{item.snippet}</p>
+            
+            <h5 className="text-[15px] font-semibold text-ink leading-snug line-clamp-3 mb-2 opacity-95 hover:opacity-100 transition-opacity">
+              {item.headline}
+            </h5>
+            
+            <p className="text-[13px] text-ink-muted/90 line-clamp-2 leading-relaxed opacity-80">
+              {item.snippet}
+            </p>
           </button>
         ))}
       </div>
-
-      {/* Load more */}
-      {news.length < 8 && (
-        <button
-          onClick={loadMore}
-          className="w-full mt-4 py-2 text-sm text-leaf hover:underline"
-        >
-          {t.ver_mas}
-        </button>
-      )}
     </div>
   )
 }
