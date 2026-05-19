@@ -102,6 +102,7 @@ export interface NewsItem {
   headline: string
   snippet: string
   timeAgo: string
+  url?: string
   clicked?: boolean
 }
 

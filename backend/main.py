@@ -262,12 +262,12 @@ async def get_news(lang: str = "es"):
     if lang in NEWS_CACHE and (now - NEWS_CACHE[lang]["timestamp"] < 600):
         return {"news": NEWS_CACHE[lang]["news"], "cached": True}
         
-    query = "economía finanzas" if lang == "es" else "economy finance"
+    query = "economía colombia finanzas noticias" if lang == "es" else "US economy finance news colombia"
     try:
         from ddgs import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.news(query, max_results=5))
-            
+            results = list(ddgs.news(query, max_results=8))
+
         formatted_news = []
         for i, item in enumerate(results):
             formatted_news.append({
@@ -275,7 +275,8 @@ async def get_news(lang: str = "es"):
                 "source": item.get("source", "Noticias"),
                 "headline": item.get("title", ""),
                 "snippet": item.get("body", ""),
-                "timeAgo": item.get("date", "")[:16].replace("T", " ")
+                "timeAgo": item.get("date", "")[:16].replace("T", " "),
+                "url": item.get("url", ""),
             })
             
         NEWS_CACHE[lang] = {"timestamp": now, "news": formatted_news}

@@ -288,7 +288,11 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
     return () => clearInterval(interval)
   }, [lang])
 
-  const handleNewsClick = (item: NewsItem) => {
+  const handleNewsClick = (item: NewsItem, e: React.MouseEvent) => {
+    if (e.ctrlKey && item.url) {
+      window.open(item.url, '_blank', 'noopener,noreferrer')
+      return
+    }
     setClickedIds(prev => new Set([...prev, item.id]))
     const prefix = t.analyze_news || 'Analiza esta noticia:'
     onNewsClick?.(`${prefix} "${item.headline}"`)
@@ -363,8 +367,9 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
         {news.map((item, index) => (
           <button
             key={item.id}
-            onClick={() => handleNewsClick(item)}
-            className={`w-full text-left p-3 rounded-xl transition-all duration-200 animate-fade-in-up relative border border-transparent 
+            onClick={(e) => handleNewsClick(item, e)}
+            title={item.url ? (lang === 'es' ? 'Ctrl+Click para abrir enlace' : 'Ctrl+Click to open link') : undefined}
+            className={`w-full text-left p-3 rounded-xl transition-all duration-200 animate-fade-in-up relative border border-transparent
               hover:border-rule hover:bg-card/40 focus:outline-none focus:bg-card/50 focus:border-leaf/30
               ${clickedIds.has(item.id) ? 'opacity-75' : ''}`}
             style={{ animationDelay: `${index * 60}ms` }}
