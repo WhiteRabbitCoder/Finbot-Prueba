@@ -338,15 +338,9 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
 
   return (
     <div className="p-4 animate-fade-in relative min-h-full pb-10">
-      {/* Live indicator header */}
+      {/* News header */}
       <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-2">
-          <span className="font-serif text-[15px] text-ink font-semibold tracking-tight">{t.economia_vivo}</span>
-          <div className="relative flex items-center justify-center ml-1">
-            <div className="w-2.5 h-2.5 bg-ember rounded-full animate-pulse shadow-[0_0_8px_rgba(255,87,87,0.7)]" />
-            <div className="absolute w-4 h-4 bg-ember/30 rounded-full animate-ping" />
-          </div>
-        </div>
+        <span className="font-serif text-[15px] text-ink font-semibold tracking-tight">{t.economia_vivo}</span>
         <button
           onClick={fetchNews}
           disabled={loading}

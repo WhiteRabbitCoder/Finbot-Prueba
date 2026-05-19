@@ -44,7 +44,7 @@ export const translations = {
     hace_min: 'Hace {x} min',
 
     // Sidebar - Noticias
-    economia_vivo: 'Economia en vivo',
+    economia_vivo: 'Noticias relacionadas con economía',
     ver_mas: 'Ver mas noticias',
     analyze_news: 'Analiza esta noticia y dime que impacto puede tener en mis finanzas personales:',
 
@@ -154,7 +154,7 @@ export const translations = {
     hace_min: '{x} min ago',
 
     // Sidebar - Noticias
-    economia_vivo: 'Live Economy',
+    economia_vivo: 'Economy-related news',
     ver_mas: 'Load more',
     analyze_news: 'Analyze this news and tell me the potential impact on my personal finances:',
 
