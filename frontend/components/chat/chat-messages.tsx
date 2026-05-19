@@ -80,7 +80,7 @@ function VoiceNote({ content, audioUrl, showTimestamp, timestamp, lang }: VoiceN
     }
   }
 
-  const formatTime = (seconds: number) => `0:${seconds.toString().padStart(2, '0')}`
+  const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`
 
   return (
     <div className="flex flex-col gap-1">
