@@ -213,6 +213,10 @@ export default function FinBot() {
       }
       setMessages(prev => [...prev, agentMessage])
     } catch (err) {
+      if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
+        handleLogout()
+        return
+      }
       const detail = err instanceof Error ? err.message : 'Error desconocido'
       const errorMessage: Message = {
         id: generateId(),
