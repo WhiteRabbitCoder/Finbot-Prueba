@@ -70,6 +70,10 @@ def _trim_memory() -> None:
     global _messages
     if len(_messages) > 14:
         _messages = _messages[-14:]
+        # Drop leading messages until we reach a user turn so no tool result
+        # appears without its preceding assistant tool_calls message.
+        while _messages and _messages[0].get("role") != "user":
+            _messages.pop(0)
 
 
 def reset_memory() -> None:
