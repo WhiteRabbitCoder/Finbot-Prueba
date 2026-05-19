@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { ToolStep } from '@/lib/types'
 import { Lang, translations } from '@/lib/translations'
+import { MarkdownMessage } from './markdown-message'
 
 interface ToolStepItemProps {
   step: ToolStep
@@ -206,7 +207,7 @@ export function ChatMessages({ messages, isTyping, showTimestamps, userName, act
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
         <div className="mb-4 opacity-50">
-          <img src="/logo.png" alt="FinBot" className="w-12 h-12 object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.4)]" />
+          <img src="/logo.png" alt="FinBot" className="w-12 h-12 object-contain logo-tinted" />
         </div>
         <p className="font-serif italic text-ink-muted text-lg">
           {getGreeting(lang)}, {userName}. {t.empty_sub}
@@ -245,7 +246,7 @@ export function ChatMessages({ messages, isTyping, showTimestamps, userName, act
                 className={`max-w-md ${
                   message.role === 'user'
                     ? 'bg-card border border-rule rounded-2xl rounded-br-sm'
-                    : 'bg-agent-bg border-l-4 border-leaf rounded-2xl rounded-bl-sm'
+                    : 'bg-agent-bg border border-rule rounded-2xl rounded-bl-sm'
                 } px-4 py-3`}
               >
                 {/* Image preview for user messages */}
@@ -258,8 +259,11 @@ export function ChatMessages({ messages, isTyping, showTimestamps, userName, act
                     />
                   </div>
                 )}
-                
-                <p className="text-ink text-sm leading-relaxed">{message.content}</p>
+
+                {message.role === 'agent'
+                  ? <MarkdownMessage content={message.content} />
+                  : <p className="text-ink text-sm leading-relaxed">{message.content}</p>
+                }
                 
                 {/* Badges for agent messages */}
                 {message.role === 'agent' && (

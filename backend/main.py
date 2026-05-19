@@ -46,6 +46,7 @@ import analytics
 import auth
 import cache
 import rag
+import sessions
 
 
 # ── State ─────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
     auth.seed_admin()
     analytics.init_analytics_tables()
     analytics.init_agent_config_table()
+    sessions.init_sessions_tables()
     stored_prompt = analytics.load_config_value("system_prompt")
     if stored_prompt:
         agent.set_system_prompt(stored_prompt)
@@ -91,6 +93,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     image_b64: str | None = None
+    session_id: str | None = None
 
 
 class SpeakRequest(BaseModel):
@@ -159,18 +162,37 @@ async def chat(req: ChatRequest, current_user: dict = Depends(auth.get_current_u
     """
     Main chat endpoint. Checks semantic cache first, then RAG context,
     then calls the LLM agent with tool calling support.
-    Returns: {reply, tool_used, from_cache}
+    Returns: {reply, tool_used, from_cache, session_id}
     """
-    from_cache = False
+    user_id: int = current_user["id"]
+
+    # Resolve or create session
+    is_new = req.session_id is None
+    if req.session_id:
+        sess = sessions.get_session(req.session_id, user_id)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        session_id = req.session_id
+    else:
+        session_id = sessions.create_session(user_id)
 
     # 1. Semantic cache check (skip for image queries — no cache for multimodal)
     if not req.image_b64:
         cached_reply, from_cache = cache.lookup(req.message)
         if from_cache:
             analytics.log_query(req.message, from_cache=True)
-            return {"reply": cached_reply, "tool_used": None, "from_cache": True}
+            if is_new:
+                sessions.set_title(session_id, user_id, sessions.auto_title(req.message))
+            sessions.append_message(session_id, "user", req.message)
+            sessions.append_message(session_id, "assistant", cached_reply, from_cache=True)
+            return {"reply": cached_reply, "tool_used": None, "from_cache": True, "session_id": session_id}
 
-    # 2. RAG context injection (skip for image queries)
+    # 2. Hydrate agent memory from DB if session not in memory (e.g. after restart)
+    if session_id not in agent.get_loaded_sessions():
+        db_msgs = sessions.get_messages(session_id, user_id)
+        agent.load_memory(session_id, db_msgs[-14:] if db_msgs else [])
+
+    # 3. RAG context injection (skip for image queries)
     user_msg = req.message
     if not req.image_b64:
         chunks = rag.retrieve(req.message)
@@ -178,10 +200,18 @@ async def chat(req: ChatRequest, current_user: dict = Depends(auth.get_current_u
             context = "\n\n".join(chunks)
             user_msg = f"Contexto de la web de FinBot:\n{context}\n\nPregunta: {req.message}"
 
-    # 3. LLM agent call (with optional image)
-    reply, tool_used = agent.chat(user_msg, req.image_b64)
+    # Persist user message and auto-title on first turn
+    if is_new:
+        sessions.set_title(session_id, user_id, sessions.auto_title(req.message))
+    sessions.append_message(session_id, "user", req.message)
 
-    # 4. Store new answer in semantic cache if no tool was used and no image
+    # 4. LLM agent call (with optional image)
+    reply, tool_used = agent.chat(session_id, user_msg, req.image_b64)
+
+    # Persist assistant reply
+    sessions.append_message(session_id, "assistant", reply, tool_used=tool_used)
+
+    # 5. Store new answer in semantic cache if no tool was used and no image
     if not tool_used and not req.image_b64:
         cache.store(req.message, reply)
 
@@ -189,7 +219,7 @@ async def chat(req: ChatRequest, current_user: dict = Depends(auth.get_current_u
     if tool_used:
         analytics.log_tool_call(tool_used)
 
-    return {"reply": reply, "tool_used": tool_used, "from_cache": False}
+    return {"reply": reply, "tool_used": tool_used, "from_cache": False, "session_id": session_id}
 
 
 @app.post("/transcribe", tags=["chat"])
@@ -228,10 +258,47 @@ async def speak(req: SpeakRequest, current_user: dict = Depends(auth.get_current
 
 
 @app.post("/reset", tags=["chat"])
-async def reset(current_user: dict = Depends(auth.get_current_user)):
-    """Clear session memory."""
-    agent.reset_memory()
+async def reset(session_id: str | None = None, current_user: dict = Depends(auth.get_current_user)):
+    """Clear in-memory context for a session."""
+    if session_id:
+        agent.reset_memory(session_id)
     return {"status": "memory cleared"}
+
+
+# ── Session endpoints ─────────────────────────────────────────
+
+@app.get("/sessions", tags=["chat"])
+async def list_sessions(current_user: dict = Depends(auth.get_current_user)):
+    """List all chat sessions for the authenticated user."""
+    return {"sessions": sessions.get_sessions(current_user["id"])}
+
+
+@app.post("/sessions", tags=["chat"])
+async def create_session_endpoint(current_user: dict = Depends(auth.get_current_user)):
+    """Create a new empty chat session."""
+    session_id = sessions.create_session(current_user["id"])
+    return {"session_id": session_id}
+
+
+@app.get("/sessions/{session_id}", tags=["chat"])
+async def get_session_endpoint(session_id: str, current_user: dict = Depends(auth.get_current_user)):
+    """Get a session and its full message history."""
+    sess = sessions.get_session(session_id, current_user["id"])
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    msgs = sessions.get_messages(session_id, current_user["id"])
+    return {"session": sess, "messages": msgs}
+
+
+@app.delete("/sessions/{session_id}", tags=["chat"])
+async def delete_session_endpoint(session_id: str, current_user: dict = Depends(auth.get_current_user)):
+    """Delete a session and all its messages."""
+    sess = sessions.get_session(session_id, current_user["id"])
+    if not sess:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    sessions.delete_session(session_id, current_user["id"])
+    agent.reset_memory(session_id)
+    return {"ok": True}
 
 
 # ── Public ────────────────────────────────────────────────────
@@ -285,6 +352,34 @@ async def get_news(lang: str = "es"):
         print(f"[News Error] {str(e)}")
         # Allow the UI to elegantly fail or show an empty state, not a crash
         return {"news": [], "cached": False, "error": str(e)}
+
+
+ARTICLE_CACHE: dict[str, dict] = {}
+
+@app.get("/fetch-article", tags=["system"])
+async def fetch_article(url: str, current_user: dict = Depends(auth.get_current_user)):
+    """Scrape and return clean article text from a URL. Cached per URL for 30 minutes."""
+    import requests as _requests
+    from bs4 import BeautifulSoup
+
+    now = time.time()
+    if url in ARTICLE_CACHE and (now - ARTICLE_CACHE[url]["timestamp"] < 1800):
+        return {"text": ARTICLE_CACHE[url]["text"], "cached": True}
+
+    try:
+        r = _requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+            tag.decompose()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+        text = "\n\n".join(paragraphs)[:3000]
+        if not text:
+            text = soup.get_text(" ", strip=True)[:3000]
+        ARTICLE_CACHE[url] = {"timestamp": now, "text": text}
+        return {"text": text, "cached": False}
+    except Exception as e:
+        return {"text": "", "error": str(e)}
 
 
 # ── Admin endpoints (require admin role) ──────────────────────

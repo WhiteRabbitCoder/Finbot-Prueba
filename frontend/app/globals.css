@@ -6,6 +6,8 @@
 :root {
   /* FinBot Warm Theme (Default) */
   --paper: #FAF1DA;
+  /* Logo tint → dark coffee brown (#2A1F12) */
+  --logo-filter: brightness(0) invert(13%) sepia(50%) saturate(400%) brightness(90%);
   --card: #F4E8C8;
   --ink: #2A1F12;
   --ink-muted: #6B5A3E;
@@ -56,6 +58,8 @@
 /* Theme: Midnight */
 .theme-midnight {
   --paper: #1A1308;
+  /* Logo tint → cream (#FAF1DA) */
+  --logo-filter: brightness(0) invert(97%) sepia(18%) saturate(500%) brightness(100%);
   --card: #251C0F;
   --ink: #FAF1DA;
   --ink-muted: #C9B89A;
@@ -69,6 +73,8 @@
 /* Theme: Coastal */
 .theme-coastal {
   --paper: #EFF6FF;
+  /* Logo tint → dark navy (#1E3A5F) */
+  --logo-filter: brightness(0) invert(18%) sepia(50%) saturate(500%) hue-rotate(195deg) brightness(90%);
   --card: #DBEAFE;
   --ink: #1E3A5F;
   --ink-muted: #3B6EA5;
@@ -84,6 +90,8 @@
 /* Theme: Forest */
 .theme-forest {
   --paper: #F0FDF4;
+  /* Logo tint → dark forest green (#14532D) */
+  --logo-filter: brightness(0) invert(20%) sepia(80%) saturate(600%) hue-rotate(115deg) brightness(75%);
   --card: #DCFCE7;
   --ink: #14532D;
   --ink-muted: #4B7A5B;
@@ -99,6 +107,8 @@
 /* Theme: Minimal */
 .theme-minimal {
   --paper: #F8FAFC;
+  /* Logo tint → dark slate (#0F172A) */
+  --logo-filter: brightness(0) invert(10%) sepia(40%) saturate(500%) hue-rotate(220deg) brightness(90%);
   --card: #F1F5F9;
   --ink: #0F172A;
   --ink-muted: #475569;
@@ -109,6 +119,12 @@
   --input-bg: #FFFFFF;
   --background: var(--paper);
   --foreground: var(--ink);
+}
+
+/* Logo tint — applies --logo-filter defined per theme */
+.logo-tinted {
+  filter: var(--logo-filter);
+  transition: filter 300ms;
 }
 
 @theme inline {
@@ -236,6 +252,15 @@
 
 .animate-slide-in-right {
   animation: slide-in-right 250ms ease-out;
+}
+
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 200ms ease-out;
 }
 
 .animate-fade-in {

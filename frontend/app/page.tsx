@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Message, InputMode, OutputMode, Theme, Settings, View, AuthUser, defaultSettings, themeClasses } from '@/lib/types'
-import { sendChatMessage, speakText, checkBackendHealth, clearToken } from '@/lib/api'
+import { Message, InputMode, OutputMode, Theme, Settings, View, AuthUser, Session, defaultSettings, themeClasses } from '@/lib/types'
+import { sendChatMessage, speakText, checkBackendHealth, clearToken, getSessions, loadSession, deleteSession } from '@/lib/api'
 import { LoginScreen } from '@/components/login-screen'
 import { Onboarding } from '@/components/onboarding'
 import { ChatHeader } from '@/components/chat/chat-header'
+import { ChatHistory } from '@/components/chat/chat-history'
 import { ChatMessages } from '@/components/chat/chat-messages'
 import { ChatInput } from '@/components/chat/chat-input'
 import { StatusPanel } from '@/components/chat/status-panel'
@@ -37,8 +38,14 @@ export default function FinBot() {
   const [backendAvailable, setBackendAvailable] = useState(false)
   const [prefillInput, setPrefillInput] = useState('')
 
+  // Session state
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+
   // UI state
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [statusPanelVisible, setStatusPanelVisible] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
   const [lang, setLang] = useState<'es' | 'en'>('es')
@@ -48,6 +55,8 @@ export default function FinBot() {
     const handleExpired = () => {
       setAuthUser(null)
       setMessages([])
+      setSessions([])
+      setActiveSessionId(null)
       setCurrentView('login')
     }
     window.addEventListener('finbot:session-expired', handleExpired)
@@ -85,6 +94,12 @@ export default function FinBot() {
           if (onboardingDone === 'true' && storedName) {
             setUserName(storedName)
             setCurrentView('chat')
+            // Load sessions for returning user
+            setSessionsLoading(true)
+            getSessions()
+              .then(data => setSessions(data))
+              .catch(() => {})
+              .finally(() => setSessionsLoading(false))
           } else {
             setCurrentView('onboarding')
           }
@@ -123,11 +138,9 @@ export default function FinBot() {
   // Apply theme class
   useEffect(() => {
     const html = document.documentElement
-    // Remove all theme classes
     Object.values(themeClasses).forEach(cls => {
       if (cls) html.classList.remove(cls)
     })
-    // Add current theme class
     const themeClass = themeClasses[theme]
     if (themeClass) {
       html.classList.add(themeClass)
@@ -139,23 +152,38 @@ export default function FinBot() {
     localStorage.setItem('finbot_settings', JSON.stringify(settings))
   }, [settings])
 
+  const loadSessionsList = useCallback(async () => {
+    setSessionsLoading(true)
+    try {
+      const data = await getSessions()
+      setSessions(data)
+    } catch {
+      // ignore — sessions panel just stays empty
+    } finally {
+      setSessionsLoading(false)
+    }
+  }, [])
+
   const handleLogin = useCallback((user: AuthUser) => {
     setAuthUser(user)
     const onboardingDone = localStorage.getItem('finbot_onboarding_done')
     const storedName = localStorage.getItem('finbot_user_name')
-    
+
     if (onboardingDone === 'true' && storedName) {
       setUserName(storedName)
       setCurrentView('chat')
+      loadSessionsList()
     } else {
       setCurrentView('onboarding')
     }
-  }, [])
+  }, [loadSessionsList])
 
   const handleLogout = useCallback(() => {
     clearToken()
     setAuthUser(null)
     setMessages([])
+    setSessions([])
+    setActiveSessionId(null)
     setCurrentView('login')
   }, [])
 
@@ -166,7 +194,8 @@ export default function FinBot() {
     localStorage.setItem('finbot_theme', selectedTheme)
     localStorage.setItem('finbot_onboarding_done', 'true')
     setCurrentView('chat')
-  }, [])
+    loadSessionsList()
+  }, [loadSessionsList])
 
   const handleThemeChange = useCallback((newTheme: Theme) => {
     setTheme(newTheme)
@@ -177,6 +206,44 @@ export default function FinBot() {
     setUserName(newName)
     localStorage.setItem('finbot_user_name', newName)
   }, [])
+
+  const handleNewChat = useCallback(() => {
+    setMessages([])
+    setActiveSessionId(null)
+    setHistoryOpen(false)
+  }, [])
+
+  const handleSelectSession = useCallback(async (id: string) => {
+    try {
+      const { messages: sessionMsgs } = await loadSession(id)
+      const uiMessages: Message[] = sessionMsgs.map(m => ({
+        id: generateId(),
+        role: (m.role === 'user' ? 'user' : 'agent') as 'user' | 'agent',
+        content: m.content ?? '',
+        toolUsed: m.tool_used ?? null,
+        fromCache: m.from_cache ?? false,
+        timestamp: new Date(m.created_at),
+      }))
+      setMessages(uiMessages)
+      setActiveSessionId(id)
+      setHistoryOpen(false)
+    } catch {
+      // silently fail — session stays as-is
+    }
+  }, [])
+
+  const handleDeleteSession = useCallback(async (id: string) => {
+    try {
+      await deleteSession(id)
+      setSessions(prev => prev.filter(s => s.id !== id))
+      if (activeSessionId === id) {
+        setMessages([])
+        setActiveSessionId(null)
+      }
+    } catch {
+      // silently fail
+    }
+  }, [activeSessionId])
 
   const handleSendMessage = useCallback(async (content: string, imageB64?: string) => {
     if (!content.trim() && !imageB64) return
@@ -192,7 +259,19 @@ export default function FinBot() {
     setIsTyping(true)
 
     try {
-      const response = await sendChatMessage(content, imageB64)
+      const response = await sendChatMessage(content, imageB64, activeSessionId ?? undefined)
+
+      // Bind session on first message of a new chat
+      if (!activeSessionId && response.session_id) {
+        setActiveSessionId(response.session_id)
+        const newSession: Session = {
+          id: response.session_id,
+          title: content.slice(0, 50).trim(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+        setSessions(prev => [newSession, ...prev])
+      }
 
       let audioUrl: string | undefined
       if (outputMode === 'audio') {
@@ -228,7 +307,7 @@ export default function FinBot() {
     } finally {
       setIsTyping(false)
     }
-  }, [outputMode])
+  }, [outputMode, activeSessionId, handleLogout])
 
   const handleNewsClick = useCallback((headline: string) => {
     const message = `Analiza esta noticia y dime que impacto puede tener en mis finanzas personales: "${headline}"`
@@ -254,13 +333,12 @@ export default function FinBot() {
     )
   }
 
-  // Render based on current view
   if (currentView === 'login') {
     return <LoginScreen onLogin={handleLogin} />
   }
 
   if (currentView === 'onboarding') {
-    return <Onboarding onComplete={handleOnboardingComplete} />
+    return <Onboarding onComplete={handleOnboardingComplete} onThemePreview={handleThemeChange} />
   }
 
   if (currentView === 'admin') {
@@ -291,11 +369,25 @@ export default function FinBot() {
         onOpenAdmin={() => setCurrentView('admin')}
         onOpenFAQ={() => setCurrentView('faq')}
         onToggleStatusPanel={() => setStatusPanelVisible(!statusPanelVisible)}
+        onToggleHistory={() => setHistoryOpen(!historyOpen)}
         showStatusPanelButton={settings.showStatusPanel}
         authUser={authUser}
       />
 
       <div className="flex-1 flex overflow-hidden">
+        {/* Chat history sidebar (desktop — always visible) */}
+        <div className="hidden md:flex flex-shrink-0">
+          <ChatHistory
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            isLoading={sessionsLoading}
+            onNewChat={handleNewChat}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={handleDeleteSession}
+            lang={lang}
+          />
+        </div>
+
         {/* Chat panel */}
         <div className="flex-1 flex flex-col min-w-0">
           <ChatMessages
@@ -348,6 +440,27 @@ export default function FinBot() {
           </div>
         )}
       </div>
+
+      {/* Chat history drawer (mobile) */}
+      {historyOpen && (
+        <div className="md:hidden fixed inset-0 z-30">
+          <div
+            className="absolute inset-0 bg-dark/50"
+            onClick={() => setHistoryOpen(false)}
+          />
+          <div className="absolute left-0 top-0 bottom-0 animate-slide-in-left">
+            <ChatHistory
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              isLoading={sessionsLoading}
+              onNewChat={handleNewChat}
+              onSelectSession={handleSelectSession}
+              onDeleteSession={handleDeleteSession}
+              lang={lang}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Settings drawer */}
       <SettingsDrawer

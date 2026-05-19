@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { SidebarTab, NewsItem, HealthStatus } from '@/lib/types'
-import { getHealthStatus, getLiveNews } from '@/lib/api'
+import { getHealthStatus, getLiveNews, fetchArticleContent } from '@/lib/api'
 import { Lang, translations, newsES, newsEN } from '@/lib/translations'
 
 interface StatusPanelProps {
@@ -262,6 +262,7 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
   const t = translations[lang]
   const [news, setNews] = useState<NewsItem[]>([])
   const [clickedIds, setClickedIds] = useState<Set<string>>(new Set())
+  const [fetchingId, setFetchingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
 
@@ -288,14 +289,25 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
     return () => clearInterval(interval)
   }, [lang])
 
-  const handleNewsClick = (item: NewsItem, e: React.MouseEvent) => {
+  const handleNewsClick = async (item: NewsItem, e: React.MouseEvent) => {
     if (e.ctrlKey && item.url) {
       window.open(item.url, '_blank', 'noopener,noreferrer')
       return
     }
     setClickedIds(prev => new Set([...prev, item.id]))
-    const prefix = t.analyze_news || 'Analiza esta noticia:'
-    onNewsClick?.(`${prefix} "${item.headline}"`)
+    setFetchingId(item.id)
+    let articleText = ''
+    if (item.url) {
+      articleText = await fetchArticleContent(item.url)
+    }
+    setFetchingId(null)
+    const prefix = lang === 'es'
+      ? 'Analiza esta noticia y dime qué impacto puede tener en mis finanzas personales.'
+      : 'Analyze this news article and tell me what impact it could have on my personal finances.'
+    const context = articleText
+      ? `${prefix}\n\nTitular: "${item.headline}"\nFuente: ${item.source}\n\nContenido del artículo:\n---\n${articleText}\n---`
+      : `${prefix}\n\n"${item.headline}"`
+    onNewsClick?.(context)
   }
 
   if (loading && news.length === 0) {
@@ -362,10 +374,12 @@ function NoticiasTab({ onNewsClick, lang }: NoticiasTabProps) {
           <button
             key={item.id}
             onClick={(e) => handleNewsClick(item, e)}
+            disabled={fetchingId === item.id}
             title={item.url ? (lang === 'es' ? 'Ctrl+Click para abrir enlace' : 'Ctrl+Click to open link') : undefined}
             className={`w-full text-left p-3 rounded-xl transition-all duration-200 animate-fade-in-up relative border border-transparent
               hover:border-rule hover:bg-card/40 focus:outline-none focus:bg-card/50 focus:border-leaf/30
-              ${clickedIds.has(item.id) ? 'opacity-75' : ''}`}
+              ${clickedIds.has(item.id) ? 'opacity-75' : ''}
+              ${fetchingId === item.id ? 'opacity-60 cursor-wait' : ''}`}
             style={{ animationDelay: `${index * 60}ms` }}
           >
             {clickedIds.has(item.id) && (

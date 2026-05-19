@@ -60,23 +60,51 @@ export async function registerUser(email: string, password: string): Promise<{
 
 // ── Chat functions ────────────────────────────────────────────
 
-export async function sendChatMessage(message: string, imageB64?: string): Promise<{
+export async function sendChatMessage(
+  message: string,
+  imageB64?: string,
+  sessionId?: string,
+): Promise<{
   reply: string
   tool_used: string | null
   from_cache: boolean
+  session_id: string
 }> {
-  // Strip data URL prefix — backend builds the full data URI itself
   const cleanImage = imageB64?.includes(',') ? imageB64.split(',')[1] : imageB64
   const response = await authFetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, image_b64: cleanImage ?? null }),
+    body: JSON.stringify({
+      message,
+      image_b64: cleanImage ?? null,
+      session_id: sessionId ?? null,
+    }),
   })
   if (!response.ok) {
     const detail = await response.json().catch(() => null)
     throw new Error(detail?.detail ?? `HTTP ${response.status}`)
   }
   return response.json()
+}
+
+export async function getSessions(): Promise<import('./types').Session[]> {
+  const r = await authFetch(`${API_BASE}/sessions`)
+  if (!r.ok) throw new Error('SESSIONS_FAILED')
+  return (await r.json()).sessions
+}
+
+export async function loadSession(id: string): Promise<{
+  session: import('./types').Session
+  messages: import('./types').SessionMessage[]
+}> {
+  const r = await authFetch(`${API_BASE}/sessions/${id}`)
+  if (!r.ok) throw new Error('LOAD_SESSION_FAILED')
+  return r.json()
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const r = await authFetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error('DELETE_SESSION_FAILED')
 }
 
 export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string }> {
@@ -251,6 +279,17 @@ export async function getHealthStatus(): Promise<import('./types').HealthStatus 
 
 export async function checkBackendHealth(): Promise<boolean> {
   return (await getHealthStatus()) !== null
+}
+
+export async function fetchArticleContent(url: string): Promise<string> {
+  try {
+    const r = await authFetch(`${API_BASE}/fetch-article?url=${encodeURIComponent(url)}`)
+    if (!r.ok) return ''
+    const data = await r.json()
+    return data.text ?? ''
+  } catch {
+    return ''
+  }
 }
 
 export async function getLiveNews(lang: 'es' | 'en'): Promise<{ news: import('./types').NewsItem[], cached: boolean }> {

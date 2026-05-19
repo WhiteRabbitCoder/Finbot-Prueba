@@ -96,6 +96,21 @@ export interface ExchangeRates {
   updatedAt: Date
 }
 
+export interface Session {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SessionMessage {
+  role: 'user' | 'assistant'
+  content: string | null
+  tool_used?: string | null
+  from_cache?: boolean
+  created_at: string
+}
+
 export interface NewsItem {
   id: string
   source: string

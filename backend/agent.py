@@ -32,8 +32,8 @@ INSTRUCTIONS
 
 6. PRIVACY — Never request or repeat passwords, PINs, full card numbers, or government IDs. If the user shares sensitive data, acknowledge it and firmly advise against sharing such information in chat."""
 
-# Session memory: list of message dicts. Kept as module-level state (single-session).
-_messages: list[dict] = []
+# Per-session in-memory history: keyed by session_id
+_session_memories: dict[str, list] = {}
 _disabled_tools: set[str] = set()
 
 
@@ -65,28 +65,47 @@ def set_tool_enabled(tool_id: str, enabled: bool) -> None:
         _disabled_tools.add(tool_id)
 
 
-def _trim_memory() -> None:
-    """Keep only the last 7 user+assistant pairs (14 messages) after the system prompt."""
-    global _messages
-    if len(_messages) > 14:
-        _messages = _messages[-14:]
-        # Drop leading messages until we reach a user turn so no tool result
-        # appears without its preceding assistant tool_calls message.
-        while _messages and _messages[0].get("role") != "user":
-            _messages.pop(0)
+def _get_role(msg) -> str:
+    if isinstance(msg, dict):
+        return msg.get("role", "")
+    return getattr(msg, "role", "")
 
 
-def reset_memory() -> None:
-    global _messages
-    _messages = []
+def _trim_memory(msgs: list) -> list:
+    """Keep only the last 7 user+assistant pairs (14 messages)."""
+    if len(msgs) > 14:
+        msgs = msgs[-14:]
+        while msgs and _get_role(msgs[0]) != "user":
+            msgs.pop(0)
+    return msgs
 
 
-def chat(user_msg: str, image_b64: str | None = None) -> tuple[str, str | None]:
+def reset_memory(session_id: str) -> None:
+    _session_memories.pop(session_id, None)
+
+
+def get_loaded_sessions() -> set[str]:
+    return set(_session_memories.keys())
+
+
+def load_memory(session_id: str, messages: list[dict]) -> None:
+    """Hydrate session memory from DB records. Expects dicts with 'role' and 'content'."""
+    _session_memories[session_id] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in messages
+        if m.get("content")
+    ]
+
+
+def get_memory(session_id: str) -> list:
+    return _session_memories.get(session_id, [])
+
+
+def chat(session_id: str, user_msg: str, image_b64: str | None = None) -> tuple[str, str | None]:
     """
     Send a message to FinBot and return (reply, tool_used).
     Optionally attach a base64-encoded image for vision queries.
     """
-    # Build content: text-only or multimodal
     if image_b64:
         content = [
             {"type": "text", "text": user_msg},
@@ -97,37 +116,36 @@ def chat(user_msg: str, image_b64: str | None = None) -> tuple[str, str | None]:
         content = user_msg
         model = MODEL
 
-    _messages.append({"role": "user", "content": content})
+    msgs = _session_memories.setdefault(session_id, [])
+    msgs.append({"role": "user", "content": content})
 
     tool_used: str | None = None
 
     active_client = vision_client if image_b64 else llm_client
     active_tools = [t for t in TOOLS_SCHEMA if t["function"]["name"] not in _disabled_tools]
 
-    # Tool calling loop — iterate until no more tool_calls in the response
     while True:
         response = active_client.chat.completions.create(
             model=model,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + _messages,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + msgs,
             tools=active_tools if active_tools else None,
             tool_choice="auto" if active_tools else None,
         )
         msg = response.choices[0].message
 
         if msg.tool_calls:
-            # Execute each tool call and feed results back
-            _messages.append(msg)
+            msgs.append(msg)
             for tc in msg.tool_calls:
                 tool_used = tc.function.name
                 args = json.loads(tc.function.arguments)
                 result = execute_tool(tc.function.name, args)
-                _messages.append({
+                msgs.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(result),
                 })
         else:
             reply = msg.content
-            _messages.append({"role": "assistant", "content": reply})
-            _trim_memory()
+            msgs.append({"role": "assistant", "content": reply})
+            _session_memories[session_id] = _trim_memory(msgs)
             return reply, tool_used

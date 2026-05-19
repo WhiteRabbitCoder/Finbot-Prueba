@@ -11,6 +11,7 @@ interface ChatHeaderProps {
   onOpenAdmin: () => void
   onOpenFAQ: () => void
   onToggleStatusPanel: () => void
+  onToggleHistory: () => void
   showStatusPanelButton: boolean
   authUser: AuthUser | null
   lang: Lang
@@ -22,6 +23,7 @@ export function ChatHeader({
   onOpenAdmin,
   onOpenFAQ,
   onToggleStatusPanel,
+  onToggleHistory,
   showStatusPanelButton,
   authUser,
   lang,
@@ -43,14 +45,26 @@ export function ChatHeader({
       )}
 
       <div className="flex items-center justify-between px-4 py-3">
-        {/* Logo */}
+        {/* Logo + history toggle */}
         <div className="flex items-center gap-2">
+          {/* Hamburger — opens chat history drawer on mobile */}
+          <button
+            onClick={onToggleHistory}
+            className="md:hidden p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-card transition-colors"
+            aria-label={lang === 'es' ? 'Historial de chats' : 'Chat history'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
           <Image
             src="/logo.png"
             alt="FinBot Logo"
             width={28}
             height={28}
-            className="object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.4)]"
+            className="object-contain logo-tinted"
           />
           <span className="font-serif text-lg text-ink">FinBot</span>
         </div>
@@ -103,15 +117,17 @@ export function ChatHeader({
             </svg>
           </button>
 
-          <button
-            onClick={onOpenAdmin}
-            className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-card transition-colors"
-            aria-label={lang === 'es' ? 'Panel de administracion' : 'Admin panel'}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
-              <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-            </svg>
-          </button>
+          {authUser?.role === 'admin' && (
+            <button
+              onClick={onOpenAdmin}
+              className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-card transition-colors"
+              aria-label={lang === 'es' ? 'Panel de administracion' : 'Admin panel'}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+                <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
+              </svg>
+            </button>
+          )}
 
           {/* User avatar */}
           {authUser && (

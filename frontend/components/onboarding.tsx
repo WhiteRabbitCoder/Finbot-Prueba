@@ -6,9 +6,10 @@ import { Theme, themes } from '@/lib/types'
 
 interface OnboardingProps {
   onComplete: (name: string, theme: Theme) => void
+  onThemePreview?: (theme: Theme) => void
 }
 
-export function Onboarding({ onComplete }: OnboardingProps) {
+export function Onboarding({ onComplete, onThemePreview }: OnboardingProps) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState('')
   const [selectedTheme, setSelectedTheme] = useState<Theme>('warm')
@@ -74,7 +75,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                 {themeEntries.map(([key, theme]) => (
                   <button
                     key={key}
-                    onClick={() => setSelectedTheme(key)}
+                    onClick={() => { setSelectedTheme(key); onThemePreview?.(key) }}
                     className={`p-4 rounded-xl border-2 transition-all text-left ${
                       selectedTheme === key
                         ? 'border-leaf bg-agent-bg'
@@ -124,7 +125,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
                     alt="FinBot Logo"
                     width={64}
                     height={64}
-                    className="object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.4)]"
+                    className="object-contain logo-tinted"
                   />
                 </div>
               </div>

@@ -70,7 +70,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             alt="FinBot Logo"
             width={80}
             height={80}
-            className="object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.4)]"
+            className="object-contain logo-tinted"
           />
         </div>
 
