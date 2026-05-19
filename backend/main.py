@@ -34,13 +34,15 @@ import os
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import Depends, FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import stt_client, tts_client, STT_MODEL, TTS_MODEL, TTS_VOICE
 import agent
+import analytics
+import auth
 import cache
 import rag
 
@@ -49,17 +51,19 @@ import rag
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: pre-populate semantic cache (skipped if DB already has entries)
-    cache.prepopulate(lambda q: "")
-    # RAG: only ingest if index wasn't loaded from disk
-    if rag._index is None:
+    auth.init_users_table()
+    auth.seed_admin()
+    analytics.init_analytics_tables()
+    cache.init()
+    cache.prepopulate()
+    rag.init_tables()
+    if not rag.is_ready():
         try:
             n = rag.ingest()
-            print(f"[RAG] Indexed {n} chunks from {rag.RAG_URL}")
+            print(f"[RAG] Indexed {n} chunks")
         except Exception as e:
             print(f"[RAG] Ingest skipped: {e}")
     yield
-    # Shutdown: nothing to clean up
 
 
 app = FastAPI(title="FinBot API", lifespan=lifespan)
@@ -84,19 +88,71 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class AdminConfigRequest(BaseModel):
+    env: dict[str, str]
+
+class RagAddRequest(BaseModel):
+    url: str
+
+class RagReindexRequest(BaseModel):
+    url: str | None = None
+
+class RagDeleteRequest(BaseModel):
+    url: str
+
+
 # ── Endpoints ─────────────────────────────────────────────────
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
+# ── Auth endpoints (public) ───────────────────────────────────
+
+@app.post("/auth/register", tags=["auth"])
+async def register(req: RegisterRequest):
+    """Create a new user account (role: user). Admins are seeded from env vars."""
+    user = auth.create_user(req.email, req.password)
+    token = auth.create_access_token(user["email"], user["role"])
+    return {"access_token": token, "token_type": "bearer", "role": user["role"]}
+
+
+@app.post("/auth/login", tags=["auth"])
+async def login(req: LoginRequest):
+    """Authenticate with email and password. Returns a JWT bearer token."""
+    user = auth.authenticate_user(req.email, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+    token = auth.create_access_token(user["email"], user["role"])
+    return {"access_token": token, "token_type": "bearer", "role": user["role"]}
+
+
+@app.get("/auth/me", tags=["auth"])
+async def me(current_user: dict = Depends(auth.get_current_user)):
+    """Return the authenticated user's profile."""
+    return {"email": current_user["email"], "role": current_user["role"]}
+
+
+# ── Chat endpoints (require user or admin) ────────────────────
+
+@app.post("/chat", tags=["chat"])
+async def chat(req: ChatRequest, current_user: dict = Depends(auth.get_current_user)):
     """
     Main chat endpoint. Checks semantic cache first, then RAG context,
     then calls the LLM agent with tool calling support.
     Returns: {reply, tool_used, from_cache}
     """
+    from_cache = False
+
     # 1. Semantic cache check (skip for image queries — no cache for multimodal)
     if not req.image_b64:
         cached_reply, from_cache = cache.lookup(req.message)
         if from_cache:
+            analytics.log_query(req.message, from_cache=True)
             return {"reply": cached_reply, "tool_used": None, "from_cache": True}
 
     # 2. RAG context injection (skip for image queries)
@@ -114,20 +170,23 @@ async def chat(req: ChatRequest):
     if not tool_used and not req.image_b64:
         cache.store(req.message, reply)
 
+    analytics.log_query(req.message, from_cache=False)
+    if tool_used:
+        analytics.log_tool_call(tool_used)
+
     return {"reply": reply, "tool_used": tool_used, "from_cache": False}
 
 
-@app.post("/transcribe")
-async def transcribe(audio: UploadFile = File(...)):
-    """
-    Reto 03: Speech-to-Text via Whisper.
-    Accepts .mp3, .wav, .ogg, .webm (up to 25 MB).
-    """
+@app.post("/transcribe", tags=["chat"])
+async def transcribe(
+    audio: UploadFile = File(...),
+    current_user: dict = Depends(auth.get_current_user),
+):
+    """Speech-to-Text via Whisper. Accepts .mp3, .wav, .ogg, .webm (up to 25 MB)."""
     audio_bytes = await audio.read()
     if len(audio_bytes) > 25 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="El archivo de audio supera los 25 MB.")
 
-    # Whisper needs a filename with the correct extension to detect the codec
     suffix = os.path.splitext(audio.filename or "audio.webm")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(audio_bytes)
@@ -141,12 +200,9 @@ async def transcribe(audio: UploadFile = File(...)):
         os.unlink(tmp_path)
 
 
-@app.post("/speak")
-async def speak(req: SpeakRequest):
-    """
-    Reto 03: Text-to-Speech via OpenAI TTS.
-    Returns audio/mpeg binary stream.
-    """
+@app.post("/speak", tags=["chat"])
+async def speak(req: SpeakRequest, current_user: dict = Depends(auth.get_current_user)):
+    """Text-to-Speech via OpenAI TTS. Returns audio/mpeg binary stream."""
     response = tts_client.audio.speech.create(
         model=TTS_MODEL,
         voice=TTS_VOICE,
@@ -156,16 +212,104 @@ async def speak(req: SpeakRequest):
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
 
 
-@app.post("/reset")
-async def reset():
-    """Clear session memory (useful for testing)."""
+@app.post("/reset", tags=["chat"])
+async def reset(current_user: dict = Depends(auth.get_current_user)):
+    """Clear session memory."""
     agent.reset_memory()
     return {"status": "memory cleared"}
 
 
-@app.get("/health")
+# ── Public ────────────────────────────────────────────────────
+
+@app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "rag_chunks": len(rag._chunks), "cache_entries": len(cache._cache)}
+    return {"status": "ok", "rag_chunks": rag.chunk_count(), "cache_entries": cache.count()}
+
+
+# ── Admin endpoints (require admin role) ──────────────────────
+
+@app.get("/admin/analytics", tags=["admin"])
+async def admin_analytics(current_user: dict = Depends(auth.require_admin)):
+    """Tool call counts, cache hit rate and top queries."""
+    return analytics.get_stats()
+
+
+@app.post("/admin/config", tags=["admin"])
+async def admin_config(req: AdminConfigRequest, current_user: dict = Depends(auth.require_admin)):
+    """Write env vars to .env and update os.environ. SIMILARITY_THRESHOLD applies immediately."""
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            lines = f.readlines()
+    updated: set[str] = set()
+    new_lines = []
+    for line in lines:
+        if "=" in line and not line.startswith("#"):
+            key = line.split("=", 1)[0].strip()
+            if key in req.env:
+                new_lines.append(f"{key}={req.env[key]}\n")
+                updated.add(key)
+                continue
+        new_lines.append(line)
+    for key, val in req.env.items():
+        if key not in updated:
+            new_lines.append(f"{key}={val}\n")
+    with open(env_path, "w") as f:
+        f.writelines(new_lines)
+    for key, val in req.env.items():
+        os.environ[key] = val
+    if "SIMILARITY_THRESHOLD" in req.env:
+        import config
+        config.SIMILARITY_THRESHOLD = float(req.env["SIMILARITY_THRESHOLD"])
+    client_vars = {k for k in req.env if "URL" in k or "KEY" in k}
+    return {"ok": True, "restart_required": bool(client_vars)}
+
+
+@app.post("/admin/rag/add", tags=["admin"])
+async def admin_rag_add(req: RagAddRequest, current_user: dict = Depends(auth.require_admin)):
+    """Index a new URL and merge it into the in-memory FAISS index."""
+    try:
+        n = rag.ingest(req.url)
+        return {"ok": True, "chunks": n}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/rag/reindex", tags=["admin"])
+async def admin_rag_reindex(req: RagReindexRequest, current_user: dict = Depends(auth.require_admin)):
+    """Reindex one URL, or reset and re-ingest all tracked URLs."""
+    try:
+        if req.url:
+            rag.ingest(req.url)
+        else:
+            urls = rag.get_indexed_urls() or [rag.RAG_URL]
+            rag.reset()
+            for url in urls:
+                rag.ingest(url)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/admin/rag", tags=["admin"])
+async def admin_rag_delete(req: RagDeleteRequest, current_user: dict = Depends(auth.require_admin)):
+    """Remove a URL from the index (reset + re-ingest remaining URLs)."""
+    remaining = [u for u in rag.get_indexed_urls() if u != req.url]
+    rag.reset()
+    for url in remaining:
+        try:
+            rag.ingest(url)
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@app.delete("/admin/cache", tags=["admin"])
+async def admin_cache_clear(current_user: dict = Depends(auth.require_admin)):
+    """Truncate the semantic cache (memory + DB)."""
+    cache.clear()
+    return {"ok": True}
 
 
 if __name__ == "__main__":

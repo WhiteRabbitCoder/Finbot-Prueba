@@ -15,19 +15,48 @@ def calculate_interest(principal: float, rate: float, years: int) -> dict:
 
 
 def get_usd_rate() -> dict:
-    """USD/COP exchange rate. Tries exchangerate.host; falls back to hardcoded TRM."""
+    """USD/COP exchange rate. Tries open.er-api.com, then currency-api CDN, falls back to TRM."""
+    # Primary: ExchangeRate-API Open Access (free, no key, daily updates)
+    try:
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("result") == "success":
+            return {"usd_to_cop": round(data["rates"]["COP"], 2), "source": "open.er-api.com"}
+    except Exception:
+        pass
+
+    # Secondary: fawazahmed0/currency-api via jsDelivr CDN (free, no key)
     try:
         r = requests.get(
-            "https://api.exchangerate.host/latest",
-            params={"base": "USD", "symbols": "COP"},
+            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
             timeout=5,
         )
         r.raise_for_status()
-        rate = r.json()["rates"]["COP"]
-        return {"usd_to_cop": round(rate, 2), "source": "exchangerate.host"}
+        return {"usd_to_cop": round(r.json()["usd"]["cop"], 2), "source": "currency-api (CDN)"}
     except Exception:
-        # Hardcoded TRM fallback — documented intentionally
-        return {"usd_to_cop": 4150.00, "source": "TRM referencia (dato estático)"}
+        pass
+
+    return {"usd_to_cop": 4150.00, "source": "TRM referencia (dato estático)"}
+
+
+def web_search(query: str, max_results: int = 3) -> dict:
+    """Web search via DuckDuckGo (no API key). Returns top results with title, url, snippet."""
+    try:
+        from ddgs import DDGS
+        results = []
+        with DDGS() as ddgs:
+            for hit in ddgs.text(query, max_results=max_results):
+                results.append({
+                    "title": hit["title"],
+                    "url": hit["href"],
+                    "snippet": hit["body"],
+                })
+        if not results:
+            return {"error": "No se encontraron resultados para esa búsqueda."}
+        return {"results": results}
+    except Exception as e:
+        return {"error": f"Búsqueda web no disponible: {str(e)}"}
 
 
 def get_crypto_price(coin_id: str) -> dict:
@@ -85,6 +114,27 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "web_search",
+            "description": (
+                "Busca información actualizada en la web. "
+                "Úsala para noticias financieras recientes, regulaciones o datos de FinBot que no estén en tu conocimiento. "
+                "No la uses para tasas de cambio ni precios de criptos — esas tienen tools dedicadas."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Consulta de búsqueda en lenguaje natural. Sé específico para mejores resultados.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_crypto_price",
             "description": (
                 "Consulta el precio actual en USD de una criptomoneda en CoinGecko. "
@@ -111,6 +161,8 @@ def execute_tool(name: str, args: dict) -> dict:
         return calculate_interest(**args)
     if name == "get_usd_rate":
         return get_usd_rate()
+    if name == "web_search":
+        return web_search(**args)
     if name == "get_crypto_price":
         return get_crypto_price(**args)
     return {"error": f"Tool '{name}' no reconocida"}

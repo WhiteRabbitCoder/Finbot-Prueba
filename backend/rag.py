@@ -1,19 +1,18 @@
 import os
-import json
-import faiss
 import numpy as np
 import requests
+import psycopg2
 from bs4 import BeautifulSoup
 from config import (
-    embeddings_client, EMBEDDINGS_MODEL,
-    RAG_URL, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP,
-    FAISS_INDEX_PATH, FAISS_CHUNKS_PATH,
+    embeddings_client, EMBEDDINGS_MODEL, DATABASE_URL,
+    RAG_URL, RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP, EMBEDDING_DIM,
 )
 
-_chunks: list[str] = []
-_index: faiss.Index | None = None
+RAG_SIMILARITY_THRESHOLD = 0.75
 
-RAG_SIMILARITY_THRESHOLD = 0.75  # Lower than semantic cache — RAG needs wider recall
+
+def _connect():
+    return psycopg2.connect(DATABASE_URL)
 
 
 def _embed(texts: list[str]) -> np.ndarray:
@@ -25,8 +24,11 @@ def _embed_single(text: str) -> np.ndarray:
     return _embed([text])[0]
 
 
+def _vec_literal(arr: np.ndarray) -> str:
+    return "[" + ",".join(f"{x:.8f}" for x in arr.tolist()) + "]"
+
+
 def _scrape(url: str) -> str:
-    """Fetch URL and strip nav/footer/scripts to get clean body text."""
     r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
@@ -36,7 +38,6 @@ def _scrape(url: str) -> str:
 
 
 def _chunk(text: str, size: int = RAG_CHUNK_SIZE, overlap: int = RAG_CHUNK_OVERLAP) -> list[str]:
-    """Split text into overlapping chunks by paragraph then character count."""
     paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 40]
     chunks, current = [], ""
     for para in paragraphs:
@@ -51,53 +52,136 @@ def _chunk(text: str, size: int = RAG_CHUNK_SIZE, overlap: int = RAG_CHUNK_OVERL
     return chunks
 
 
-def _save_to_disk() -> None:
-    faiss.write_index(_index, FAISS_INDEX_PATH)
-    with open(FAISS_CHUNKS_PATH, "w", encoding="utf-8") as f:
-        json.dump(_chunks, f, ensure_ascii=False)
-
-
-def _load_from_disk() -> bool:
-    """Try to load index and chunks from disk. Returns True if successful."""
-    global _index, _chunks
-    if os.path.exists(FAISS_INDEX_PATH) and os.path.exists(FAISS_CHUNKS_PATH):
-        _index = faiss.read_index(FAISS_INDEX_PATH)
-        with open(FAISS_CHUNKS_PATH, encoding="utf-8") as f:
-            _chunks = json.load(f)
-        print(f"[RAG] Loaded {len(_chunks)} chunks from disk")
-        return True
-    return False
+def init_tables() -> None:
+    if not DATABASE_URL:
+        print("[RAG] No DATABASE_URL — RAG disabled")
+        return
+    con = _connect()
+    cur = con.cursor()
+    try:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        con.commit()
+    except Exception:
+        con.rollback()
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS rag_chunks (
+            id         SERIAL PRIMARY KEY,
+            source_url TEXT NOT NULL,
+            content    TEXT NOT NULL,
+            embedding  vector({EMBEDDING_DIM})
+        )
+    """)
+    cur.execute(f"""
+        CREATE TABLE IF NOT EXISTS rag_sources (
+            id          SERIAL PRIMARY KEY,
+            url         TEXT UNIQUE NOT NULL,
+            chunk_count INTEGER DEFAULT 0,
+            indexed_at  TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    cur.execute(f"""
+        CREATE INDEX IF NOT EXISTS rag_chunks_embedding_idx
+        ON rag_chunks USING hnsw (embedding vector_cosine_ops)
+    """)
+    con.commit()
+    con.close()
+    print("[RAG] Tables initialized (pgvector)")
 
 
 def ingest(url: str = RAG_URL) -> int:
-    """Scrape, chunk, embed and persist the target URL. Returns number of chunks."""
-    global _chunks, _index
-    text = _scrape(url)
-    _chunks = _chunk(text)
-    if not _chunks:
-        raise ValueError(f"No chunks generated from {url}. The page may be too short or blocked.")
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL required for RAG ingest")
 
-    vecs = _embed(_chunks)
-    faiss.normalize_L2(vecs)  # Required for IndexFlatIP to act as cosine similarity
-    _index = faiss.IndexFlatIP(vecs.shape[1])
-    _index.add(vecs)
-    _save_to_disk()
-    return len(_chunks)
+    text = _scrape(url)
+    chunks = _chunk(text)
+    if not chunks:
+        raise ValueError(f"No chunks generated from {url}")
+
+    con = _connect()
+    cur = con.cursor()
+
+    cur.execute("DELETE FROM rag_chunks WHERE source_url = %s", (url,))
+
+    batch_size = 20
+    for i in range(0, len(chunks), batch_size):
+        batch_texts = chunks[i:i + batch_size]
+        batch_vecs = _embed(batch_texts)
+        for chunk_text, vec in zip(batch_texts, batch_vecs):
+            cur.execute(
+                "INSERT INTO rag_chunks (source_url, content, embedding) VALUES (%s, %s, %s::vector)",
+                (url, chunk_text, _vec_literal(vec)),
+            )
+
+    cur.execute("""
+        INSERT INTO rag_sources (url, chunk_count) VALUES (%s, %s)
+        ON CONFLICT (url) DO UPDATE SET chunk_count = EXCLUDED.chunk_count, indexed_at = NOW()
+    """, (url, len(chunks)))
+
+    con.commit()
+    con.close()
+    return len(chunks)
 
 
 def retrieve(query: str, k: int = 3) -> list[str]:
-    """Return top-k relevant chunks, or empty list if below similarity threshold."""
-    if _index is None or not _chunks:
+    if not DATABASE_URL:
         return []
-    q_vec = _embed_single(query).reshape(1, -1)
-    faiss.normalize_L2(q_vec)
-    scores, indices = _index.search(q_vec, k)
-    return [
-        _chunks[i]
-        for i, s in zip(indices[0], scores[0])
-        if i >= 0 and s >= RAG_SIMILARITY_THRESHOLD
-    ]
+    vec_str = _vec_literal(_embed_single(query))
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT content
+        FROM rag_chunks
+        WHERE 1 - (embedding <=> %s::vector) >= %s
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+    """, (vec_str, RAG_SIMILARITY_THRESHOLD, vec_str, k))
+    results = [row[0] for row in cur.fetchall()]
+    con.close()
+    return results
 
 
-# Try to load from disk when the module is imported
-_load_from_disk()
+def get_indexed_urls() -> list[str]:
+    if not DATABASE_URL:
+        return []
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("SELECT url FROM rag_sources ORDER BY indexed_at")
+    urls = [row[0] for row in cur.fetchall()]
+    con.close()
+    return urls
+
+
+def reset() -> None:
+    if not DATABASE_URL:
+        return
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("TRUNCATE rag_chunks, rag_sources")
+    con.commit()
+    con.close()
+    print("[RAG] Reset — all chunks and sources cleared")
+
+
+def chunk_count() -> int:
+    if not DATABASE_URL:
+        return 0
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM rag_chunks")
+    n = cur.fetchone()[0]
+    con.close()
+    return n
+
+
+def is_ready() -> bool:
+    if not DATABASE_URL:
+        return False
+    try:
+        con = _connect()
+        cur = con.cursor()
+        cur.execute("SELECT EXISTS(SELECT 1 FROM rag_chunks)")
+        ready = cur.fetchone()[0]
+        con.close()
+        return ready
+    except Exception:
+        return False

@@ -1,31 +1,15 @@
-import os
-import sqlite3
+import uuid
 import numpy as np
-from config import embeddings_client, EMBEDDINGS_MODEL, SIMILARITY_THRESHOLD, CACHE_DB_PATH
+from config import (
+    embeddings_client, EMBEDDINGS_MODEL,
+    SIMILARITY_THRESHOLD, REDIS_URL, EMBEDDING_DIM,
+)
 
-# DATABASE_URL present → NeonDB / PostgreSQL. Absent → SQLite fallback.
-DATABASE_URL = os.getenv("DATABASE_URL")
-_USE_PG      = bool(DATABASE_URL)
-_PH          = "%s" if _USE_PG else "?"   # SQL placeholder differs between drivers
+_redis = None
+_INDEX_NAME = "cache_idx"
+_PREFIX = "cache:"
 
-# In-memory layer for fast lookup during runtime.
-# The DB (Postgres or SQLite) is the source of truth — loaded on startup.
-_cache: list[dict] = []
-
-
-def _connect():
-    if _USE_PG:
-        import psycopg2
-        return psycopg2.connect(DATABASE_URL)
-    return sqlite3.connect(CACHE_DB_PATH)
-
-
-def _binary(emb: np.ndarray):
-    """Wrap embedding bytes for the active driver."""
-    if _USE_PG:
-        import psycopg2
-        return psycopg2.Binary(emb.tobytes())
-    return emb.tobytes()
+_fallback: list[dict] = []
 
 
 def _embed(text: str) -> np.ndarray:
@@ -37,45 +21,86 @@ def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
 
 
-def _init_db() -> None:
-    """Create table if not exists and load all existing entries into _cache."""
-    con = _connect()
-    cur = con.cursor()
+def _use_redis() -> bool:
+    return _redis is not None
 
-    if _USE_PG:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                id        SERIAL PRIMARY KEY,
-                question  TEXT NOT NULL,
-                answer    TEXT NOT NULL,
-                embedding BYTEA NOT NULL
-            )
-        """)
+
+def _create_index() -> None:
+    from redis.commands.search.field import VectorField, TextField
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+
+    schema = (
+        TextField("question"),
+        TextField("answer"),
+        VectorField("embedding", "FLAT", {
+            "TYPE": "FLOAT32",
+            "DIM": EMBEDDING_DIM,
+            "DISTANCE_METRIC": "COSINE",
+        }),
+    )
+    try:
+        _redis.ft(_INDEX_NAME).create_index(
+            schema,
+            definition=IndexDefinition(prefix=[_PREFIX], index_type=IndexType.HASH),
+        )
+        print(f"[Cache] Created RediSearch index '{_INDEX_NAME}'")
+    except Exception:
+        pass
+
+
+def init() -> None:
+    global _redis
+    if not REDIS_URL:
+        print("[Cache] No REDIS_URL — using in-memory fallback")
+        return
+    import redis
+    _redis = redis.from_url(REDIS_URL, decode_responses=False)
+    _redis.ping()
+    _create_index()
+    backend = REDIS_URL.split("@")[-1].split("/")[0] if "@" in REDIS_URL else REDIS_URL
+    print(f"[Cache] Connected to Redis ({backend})")
+
+
+def lookup(query: str) -> tuple[str | None, bool]:
+    if _use_redis():
+        return _lookup_redis(query)
+    return _lookup_memory(query)
+
+
+def store(query: str, answer: str) -> None:
+    if _use_redis():
+        _store_redis(query, answer)
     else:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                question  TEXT NOT NULL,
-                answer    TEXT NOT NULL,
-                embedding BLOB NOT NULL
-            )
-        """)
-
-    con.commit()
-    cur.execute("SELECT question, answer, embedding FROM cache")
-    for q, a, emb_bytes in cur.fetchall():
-        emb = np.frombuffer(bytes(emb_bytes), dtype=np.float32).copy()
-        _cache.append({"q": q, "a": a, "emb": emb})
-    con.close()
-
-    backend = "PostgreSQL (NeonDB)" if _USE_PG else f"SQLite ({CACHE_DB_PATH})"
-    print(f"[Cache] Using {backend}")
+        _store_memory(query, answer)
 
 
-def prepopulate(llm_call) -> None:
-    """Embed and store the 5 standard FinBot FAQs — skipped if DB already has entries."""
-    if _cache:
-        print(f"[Cache] Loaded {len(_cache)} existing entries")
+def clear() -> None:
+    if _use_redis():
+        try:
+            _redis.ft(_INDEX_NAME).dropindex(delete_documents=True)
+        except Exception:
+            pass
+        _create_index()
+        print("[Cache] Cleared (Redis)")
+    else:
+        global _fallback
+        _fallback = []
+        print("[Cache] Cleared (memory)")
+
+
+def count() -> int:
+    if _use_redis():
+        try:
+            info = _redis.ft(_INDEX_NAME).info()
+            return int(info.get("num_docs", info.get(b"num_docs", 0)))
+        except Exception:
+            return 0
+    return len(_fallback)
+
+
+def prepopulate(llm_call=None) -> None:
+    if count() > 0:
+        print(f"[Cache] Loaded {count()} existing entries")
         return
 
     faqs = [
@@ -95,31 +120,53 @@ def prepopulate(llm_call) -> None:
     print(f"[Cache] Pre-populated {len(faqs)} FAQs")
 
 
-def lookup(query: str) -> tuple[str | None, bool]:
-    """Check cache before calling the LLM. Returns (answer, from_cache)."""
-    if not _cache:
-        return None, False
+# ── Redis implementation ─────────────────────────────────────
+
+def _lookup_redis(query: str) -> tuple[str | None, bool]:
+    from redis.commands.search.query import Query
+
     q_emb = _embed(query)
-    sims = [_cosine_sim(q_emb, entry["emb"]) for entry in _cache]
-    best_idx = int(np.argmax(sims))
-    if sims[best_idx] >= SIMILARITY_THRESHOLD:
-        return _cache[best_idx]["a"], True
+    q = (
+        Query("*=>[KNN 1 @embedding $vec AS score]")
+        .return_fields("answer", "score")
+        .dialect(2)
+    )
+    results = _redis.ft(_INDEX_NAME).search(q, query_params={"vec": q_emb.tobytes()})
+    if results.docs:
+        doc = results.docs[0]
+        score = float(doc.score if hasattr(doc, "score") else doc["score"])
+        similarity = 1 - score
+        if similarity >= SIMILARITY_THRESHOLD:
+            answer = doc.answer if hasattr(doc, "answer") else doc["answer"]
+            if isinstance(answer, bytes):
+                answer = answer.decode()
+            return answer, True
     return None, False
 
 
-def store(query: str, answer: str) -> None:
-    """Store a question-answer pair in memory and persist to the active DB."""
+def _store_redis(query: str, answer: str) -> None:
     emb = _embed(query)
-    _cache.append({"q": query, "a": answer, "emb": emb})
-    con = _connect()
-    cur = con.cursor()
-    cur.execute(
-        f"INSERT INTO cache (question, answer, embedding) VALUES ({_PH}, {_PH}, {_PH})",
-        (query, answer, _binary(emb)),
-    )
-    con.commit()
-    con.close()
+    doc_id = f"{_PREFIX}{uuid.uuid4().hex}"
+    _redis.hset(doc_id, mapping={
+        "question": query,
+        "answer": answer,
+        "embedding": emb.tobytes(),
+    })
 
 
-# Initialize DB and load existing entries when the module is imported
-_init_db()
+# ── In-memory fallback ───────────────────────────────────────
+
+def _lookup_memory(query: str) -> tuple[str | None, bool]:
+    if not _fallback:
+        return None, False
+    q_emb = _embed(query)
+    sims = [_cosine_sim(q_emb, entry["emb"]) for entry in _fallback]
+    best_idx = int(np.argmax(sims))
+    if sims[best_idx] >= SIMILARITY_THRESHOLD:
+        return _fallback[best_idx]["a"], True
+    return None, False
+
+
+def _store_memory(query: str, answer: str) -> None:
+    emb = _embed(query)
+    _fallback.append({"q": query, "a": answer, "emb": emb})

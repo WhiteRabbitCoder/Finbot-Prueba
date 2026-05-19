@@ -41,7 +41,11 @@ RAG_CHUNK_OVERLAP= int(os.getenv("RAG_CHUNK_OVERLAP", "80"))
 
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.90"))
 
-# Persistence paths
-CACHE_DB_PATH     = os.getenv("CACHE_DB_PATH",     "cache.db")
-FAISS_INDEX_PATH  = os.getenv("FAISS_INDEX_PATH",  "faiss.index")
-FAISS_CHUNKS_PATH = os.getenv("FAISS_CHUNKS_PATH", "faiss_chunks.json")
+# PostgreSQL (required)
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+# Redis Stack (optional — falls back to in-memory cache)
+REDIS_URL = os.getenv("REDIS_URL", "")
+
+# Vector dimension (text-embedding-3-small = 1536)
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
