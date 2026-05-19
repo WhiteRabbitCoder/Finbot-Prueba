@@ -144,7 +144,7 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
   const toolCallsData = analyticsData?.tools.map(t => ({ name: t.tool, calls: t.calls })) ?? []
   const maxCalls = Math.max(...toolCallsData.map(t => t.calls), 1)
   const topSearches = analyticsData?.top_queries.map((q, i) => ({ rank: i + 1, topic: q.query, count: q.count })) ?? []
-  const hitRate = analyticsData ? Math.round(analyticsData.cache.hit_rate * 100) : null
+  const hitRate = analyticsData ? Math.round(analyticsData.cache.hit_rate) : null
   const totalCalls = analyticsData ? analyticsData.tools.reduce((s, t) => s + t.calls, 0) : null
   const totalQueries = analyticsData?.cache.total_queries ?? null
 

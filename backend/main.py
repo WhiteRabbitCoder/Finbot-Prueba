@@ -463,8 +463,9 @@ async def admin_rag_delete(req: RagDeleteRequest, current_user: dict = Depends(a
 
 @app.delete("/admin/cache", tags=["admin"])
 async def admin_cache_clear(current_user: dict = Depends(auth.require_admin)):
-    """Truncate the semantic cache (memory + DB)."""
+    """Truncate the semantic cache (memory + DB) and reset analytics logs."""
     cache.clear()
+    analytics.clear_analytics()
     return {"ok": True}
 
 

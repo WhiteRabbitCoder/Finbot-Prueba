@@ -67,6 +67,14 @@ def init_analytics_tables() -> None:
     con.close()
 
 
+def clear_analytics() -> None:
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("TRUNCATE tool_calls, query_log")
+    con.commit()
+    con.close()
+
+
 def log_tool_call(tool_name: str) -> None:
     con = _connect()
     cur = con.cursor()
