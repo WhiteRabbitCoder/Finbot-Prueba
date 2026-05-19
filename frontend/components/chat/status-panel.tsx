@@ -113,6 +113,118 @@ function SistemaTab({ lang }: SistemaTabProps) {
   )
 }
 
+interface HistoryPoint { date: string; rate: number }
+
+interface CurrencyHistoryModalProps {
+  currency: string
+  onClose: () => void
+  lang: Lang
+}
+
+function CurrencyHistoryModal({ currency, onClose, lang }: CurrencyHistoryModalProps) {
+  const [points, setPoints] = useState<HistoryPoint[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchHistory = async () => {
+      const today = new Date()
+      const dates: string[] = []
+      for (let i = 29; i >= 0; i -= 6) {
+        const d = new Date(today)
+        d.setDate(d.getDate() - i)
+        dates.push(d.toISOString().split('T')[0])
+      }
+      const results = await Promise.all(
+        dates.map(async (date) => {
+          try {
+            const r = await fetch(
+              `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${date}/v1/currencies/usd.min.json`,
+              { signal: AbortSignal.timeout(6000) }
+            )
+            if (!r.ok) return null
+            const data = await r.json()
+            const rate = data?.usd?.[currency.toLowerCase()]
+            return rate != null ? { date, rate } : null
+          } catch {
+            return null
+          }
+        })
+      )
+      setPoints(results.filter(Boolean) as HistoryPoint[])
+      setLoading(false)
+    }
+    fetchHistory()
+  }, [currency])
+
+  const W = 260, H = 100, PAD = 8
+  const min = points.length ? Math.min(...points.map(p => p.rate)) : 0
+  const max = points.length ? Math.max(...points.map(p => p.rate)) : 1
+  const range = max - min || 1
+  const toX = (i: number) => PAD + (i / (points.length - 1)) * (W - PAD * 2)
+  const toY = (v: number) => H - PAD - ((v - min) / range) * (H - PAD * 2)
+  const polyline = points.map((p, i) => `${toX(i)},${toY(p.rate)}`).join(' ')
+  const trend = points.length >= 2 ? points[points.length - 1].rate - points[0].rate : 0
+  const trendColor = trend >= 0 ? '#8AC553' : '#E8A95C'
+  const formatRate = (v: number) => v >= 100 ? v.toLocaleString('es-CO', { maximumFractionDigits: 0 }) : v.toFixed(4)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-paper border border-rule rounded-2xl p-5 w-80 shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="font-serif text-base text-ink">USD / {currency}</p>
+            <p className="text-xs text-ink-muted">{lang === 'es' ? 'Últimos 30 días' : 'Last 30 days'}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-ink-muted hover:text-ink transition-colors">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="h-24 flex items-center justify-center">
+            <div className="w-5 h-5 border-2 border-leaf border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : points.length < 2 ? (
+          <p className="text-xs text-ink-muted text-center py-6">
+            {lang === 'es' ? 'Datos no disponibles' : 'Data unavailable'}
+          </p>
+        ) : (
+          <>
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }}>
+              <defs>
+                <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={trendColor} stopOpacity="0.15" />
+                  <stop offset="100%" stopColor={trendColor} stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <polygon
+                points={`${toX(0)},${H} ${polyline} ${toX(points.length - 1)},${H}`}
+                fill="url(#chartGrad)"
+              />
+              <polyline points={polyline} fill="none" stroke={trendColor} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+              <circle cx={toX(points.length - 1)} cy={toY(points[points.length - 1].rate)} r="3" fill={trendColor} />
+            </svg>
+            <div className="flex items-center justify-between mt-3">
+              <div>
+                <p className="font-serif text-xl text-ink">{formatRate(points[points.length - 1].rate)}</p>
+                <p className="text-xs text-ink-muted">{points[0].date} → {points[points.length - 1].date}</p>
+              </div>
+              <p className={`text-sm font-medium ${trend >= 0 ? 'text-leaf' : 'text-ember'}`}>
+                {trend >= 0 ? '+' : ''}{formatRate(Math.abs(trend))} ({((trend / points[0].rate) * 100).toFixed(2)}%)
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface CurrencyRate {
   pair: string
   rate: number
@@ -130,6 +242,7 @@ function MercadosTab({ lang }: MercadosTabProps) {
   const [error, setError] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [selectedCurrency, setSelectedCurrency] = useState<string | null>(null)
   const prevRatesRef = useRef<Record<string, number>>({})
 
   const fetchRates = async () => {
@@ -224,24 +337,40 @@ function MercadosTab({ lang }: MercadosTabProps) {
 
       {/* Currency table-like layout */}
       <div className="divide-y divide-rule">
-        {rates.map(rate => (
-          <div key={rate.pair} className="py-3 flex items-center justify-between">
-            <span className="text-xs font-medium text-ink-muted uppercase tracking-wide w-20">{rate.pair}</span>
-            <span className="font-serif text-base text-ink flex-1 text-center">
-              {rate.rate.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </span>
-            <div className="text-right w-20">
-              {rate.change != null ? (
-                <p className={`text-xs font-medium ${rate.change >= 0 ? 'text-leaf' : 'text-ember'}`}>
-                  {rate.change >= 0 ? '+' : ''}{rate.change.toFixed(3)}%
-                </p>
-              ) : (
-                <p className="text-xs text-ink-muted">—</p>
-              )}
-            </div>
-          </div>
-        ))}
+        {rates.map(rate => {
+          const currency = rate.pair.split(' / ')[1]
+          return (
+            <button
+              key={rate.pair}
+              onClick={() => setSelectedCurrency(currency)}
+              className="w-full py-3 flex items-center justify-between hover:bg-card/40 transition-colors rounded-lg px-1 -mx-1"
+              title={lang === 'es' ? 'Ver histórico' : 'View history'}
+            >
+              <span className="text-xs font-medium text-ink-muted uppercase tracking-wide w-20 text-left">{rate.pair}</span>
+              <span className="font-serif text-base text-ink flex-1 text-center">
+                {rate.rate.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <div className="text-right w-20">
+                {rate.change != null ? (
+                  <p className={`text-xs font-medium ${rate.change >= 0 ? 'text-leaf' : 'text-ember'}`}>
+                    {rate.change >= 0 ? '+' : ''}{rate.change.toFixed(3)}%
+                  </p>
+                ) : (
+                  <p className="text-xs text-ink-muted">—</p>
+                )}
+              </div>
+            </button>
+          )
+        })}
       </div>
+
+      {selectedCurrency && (
+        <CurrencyHistoryModal
+          currency={selectedCurrency}
+          onClose={() => setSelectedCurrency(null)}
+          lang={lang}
+        />
+      )}
 
       {/* Footer */}
       {lastUpdated && (

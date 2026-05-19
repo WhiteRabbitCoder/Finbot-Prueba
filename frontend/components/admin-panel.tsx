@@ -11,6 +11,8 @@ import {
   clearCache,
   addRagUrl,
   reindexRag,
+  deleteRagUrl,
+  getRagSources,
 } from '@/lib/api'
 
 interface AdminPanelProps {
@@ -47,6 +49,7 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
 
   const [ragUrl, setRagUrl] = useState('')
   const [ragLoading, setRagLoading] = useState(false)
+  const [ragSources, setRagSources] = useState<Array<{ url: string; chunk_count: number; indexed_at: string }>>([])
 
   const [clearingCache, setClearingCache] = useState(false)
 
@@ -64,6 +67,8 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
     getAnalytics()
       .then(setAnalyticsData)
       .catch(() => {})
+
+    getRagSources().then(setRagSources).catch(() => {})
 
     setTimeout(() => setBarAnimated(true), 100)
   }, [])
@@ -122,6 +127,7 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
           : `URL indexed (${result.chunks} chunks)`
       )
       setRagUrl('')
+      getRagSources().then(setRagSources).catch(() => {})
     } catch {
       onShowToast(lang === 'es' ? 'Error al indexar URL' : 'Indexing failed')
     } finally {
@@ -134,8 +140,23 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
     try {
       await reindexRag()
       onShowToast(lang === 'es' ? 'Re-indexado completado' : 'Re-index complete')
+      getRagSources().then(setRagSources).catch(() => {})
     } catch {
       onShowToast(lang === 'es' ? 'Error al re-indexar' : 'Re-index failed')
+    } finally {
+      setRagLoading(false)
+    }
+  }
+
+  const handleDeleteRagSource = async (url: string) => {
+    if (!window.confirm(t.rag_delete_confirm)) return
+    setRagLoading(true)
+    try {
+      await deleteRagUrl(url)
+      onShowToast(lang === 'es' ? 'Fuente eliminada' : 'Source removed')
+      getRagSources().then(setRagSources).catch(() => {})
+    } catch {
+      onShowToast(lang === 'es' ? 'Error al eliminar fuente' : 'Delete failed')
     } finally {
       setRagLoading(false)
     }
@@ -326,6 +347,34 @@ export function AdminPanel({ onBack, onShowToast, lang }: AdminPanelProps) {
           <section>
             <h2 className="font-serif text-lg text-ink mb-3">{t.rag_label}</h2>
             <div className="space-y-2">
+              {/* Indexed sources list */}
+              {ragSources.length === 0 ? (
+                <p className="text-xs text-ink-muted py-2">{t.rag_no_sources}</p>
+              ) : (
+                <div className="space-y-1 mb-2">
+                  {ragSources.map(src => (
+                    <div key={src.url} className="flex items-center gap-2 bg-card border border-rule rounded-xl px-3 py-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-ink truncate font-mono">{src.url}</p>
+                        <p className="text-[11px] text-ink-muted">{src.chunk_count} chunks</p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteRagSource(src.url)}
+                        disabled={ragLoading}
+                        className="p-1.5 text-ink-muted hover:text-ember transition-colors disabled:opacity-40 flex-shrink-0"
+                        title={lang === 'es' ? 'Eliminar fuente' : 'Remove source'}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6M14 11v6" />
+                          <path d="M9 6V4h6v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
                 <input
                   type="url"

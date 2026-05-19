@@ -161,6 +161,16 @@ export async function saveConfig(env: Record<string, string>): Promise<{ ok: boo
   }
 }
 
+export async function getRagSources(): Promise<Array<{ url: string; chunk_count: number; indexed_at: string }>> {
+  try {
+    const r = await authFetch(`${API_BASE}/admin/rag/sources`)
+    if (!r.ok) return []
+    return (await r.json()).sources
+  } catch {
+    return []
+  }
+}
+
 export async function addRagUrl(url: string): Promise<{ ok: boolean; chunks: number }> {
   try {
     const response = await authFetch(`${API_BASE}/admin/rag/add`, {

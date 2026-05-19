@@ -422,6 +422,12 @@ async def admin_config(req: AdminConfigRequest, current_user: dict = Depends(aut
     return {"ok": True, "restart_required": bool(client_vars)}
 
 
+@app.get("/admin/rag/sources", tags=["admin"])
+async def admin_rag_sources(current_user: dict = Depends(auth.require_admin)):
+    """List all indexed RAG source URLs with chunk counts."""
+    return {"sources": rag.get_indexed_sources()}
+
+
 @app.post("/admin/rag/add", tags=["admin"])
 async def admin_rag_add(req: RagAddRequest, current_user: dict = Depends(auth.require_admin)):
     """Index a new URL and merge it into the in-memory FAISS index."""

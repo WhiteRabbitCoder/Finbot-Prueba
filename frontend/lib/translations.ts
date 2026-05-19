@@ -79,6 +79,8 @@ export const translations = {
     rag_url_placeholder: 'https://...',
     rag_add_btn: 'Indexar',
     rag_reindex_btn: 'Re-indexar todo',
+    rag_no_sources: 'Sin fuentes indexadas',
+    rag_delete_confirm: 'Eliminar esta fuente del indice?',
 
     // Settings drawer
     settings_title: 'Ajustes',
@@ -189,6 +191,8 @@ export const translations = {
     rag_url_placeholder: 'https://...',
     rag_add_btn: 'Index',
     rag_reindex_btn: 'Re-index all',
+    rag_no_sources: 'No indexed sources',
+    rag_delete_confirm: 'Remove this source from the index?',
 
     // Settings drawer
     settings_title: 'Settings',

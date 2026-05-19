@@ -32,13 +32,18 @@ def _scrape(url: str) -> str:
     r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
-    for tag in soup(["nav", "footer", "script", "style", "header", "aside"]):
+    for tag in soup(["nav", "footer", "script", "style", "header", "aside", "noscript", "iframe", "picture"]):
         tag.decompose()
     return soup.get_text(separator="\n", strip=True)
 
 
+def _is_html_artifact(text: str) -> bool:
+    """True if the paragraph is tracking pixel noise or HTML leakage, not real content."""
+    return text.lstrip().startswith("<") or text.count("&amp;") > 3 or text.count("&lt;") > 2
+
+
 def _chunk(text: str, size: int = RAG_CHUNK_SIZE, overlap: int = RAG_CHUNK_OVERLAP) -> list[str]:
-    paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 40]
+    paragraphs = [p.strip() for p in text.split("\n") if len(p.strip()) > 40 and not _is_html_artifact(p.strip())]
     chunks, current = [], ""
     for para in paragraphs:
         if len(current) + len(para) <= size:
@@ -149,6 +154,17 @@ def get_indexed_urls() -> list[str]:
     urls = [row[0] for row in cur.fetchall()]
     con.close()
     return urls
+
+
+def get_indexed_sources() -> list[dict]:
+    if not DATABASE_URL:
+        return []
+    con = _connect()
+    cur = con.cursor()
+    cur.execute("SELECT url, chunk_count, indexed_at FROM rag_sources ORDER BY indexed_at")
+    rows = cur.fetchall()
+    con.close()
+    return [{"url": r[0], "chunk_count": r[1], "indexed_at": r[2].isoformat()} for r in rows]
 
 
 def reset() -> None:
