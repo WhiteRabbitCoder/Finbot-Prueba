@@ -1,8 +1,11 @@
 import requests
 
 # Tool 3: CoinGecko — free, no API key required.
-# Chosen because crypto prices are directly relevant to personal finance queries.
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
+
+# Yahoo Finance chart endpoint — no API key, supports BVC (.CL suffix) and major exchanges.
+YF_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+YF_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 def calculate_interest(principal: float, rate: float, years: int) -> dict:
@@ -38,6 +41,31 @@ def get_usd_rate() -> dict:
         pass
 
     return {"usd_to_cop": 4150.00, "source": "TRM referencia (dato estático)"}
+
+
+def get_stock_price(symbol: str) -> dict:
+    """Live stock price via Yahoo Finance. Supports BVC (.CL), NYSE, NASDAQ."""
+    try:
+        url = YF_CHART_URL.format(symbol=symbol)
+        r = requests.get(url, timeout=8, headers=YF_HEADERS)
+        r.raise_for_status()
+        data = r.json()
+        result = data["chart"]["result"]
+        if not result:
+            return {"error": f"Ticker '{symbol}' no encontrado en Yahoo Finance."}
+        meta = result[0]["meta"]
+        price = meta.get("regularMarketPrice")
+        if price is None:
+            return {"error": f"No hay precio disponible para '{symbol}'."}
+        return {
+            "symbol": symbol,
+            "name": meta.get("shortName") or meta.get("longName") or symbol,
+            "price": round(price, 2),
+            "currency": meta.get("currency", ""),
+            "exchange": meta.get("exchangeName", ""),
+        }
+    except Exception as e:
+        return {"error": f"No se pudo obtener el precio de '{symbol}': {str(e)}"}
 
 
 def web_search(query: str, max_results: int = 3) -> dict:
@@ -114,11 +142,34 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "get_stock_price",
+            "description": (
+                "Consulta el precio actual de una acción usando Yahoo Finance. "
+                "Úsala para acciones de la BVC (Colombia), NYSE o NASDAQ. "
+                "Tickers BVC más comunes: BCOLOMBIA.CL (Bancolombia ordinaria), PFBCOLOMBIA.CL (Bancolombia pref.), "
+                "ECOPETROL.CL (Ecopetrol), ISA.CL (ISA), GRUPOARGOS.CL. "
+                "Tickers NYSE: CIB (Bancolombia), EC (Ecopetrol)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Ticker de Yahoo Finance. Ejemplos: 'BCOLOMBIA.CL', 'CIB', 'ECOPETROL.CL', 'AAPL'",
+                    }
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": (
                 "Busca información actualizada en la web. "
-                "Úsala para noticias financieras recientes, regulaciones o datos de FinBot que no estén en tu conocimiento. "
-                "No la uses para tasas de cambio ni precios de criptos — esas tienen tools dedicadas."
+                "Úsala para noticias, eventos políticos, regulaciones o cualquier dato actual que no tenga una tool dedicada. "
+                "No la uses para precios de acciones (usa get_stock_price), tasas de cambio (get_usd_rate) ni criptos (get_crypto_price)."
             ),
             "parameters": {
                 "type": "object",
@@ -161,6 +212,8 @@ def execute_tool(name: str, args: dict) -> dict:
         return calculate_interest(**args)
     if name == "get_usd_rate":
         return get_usd_rate()
+    if name == "get_stock_price":
+        return get_stock_price(**args)
     if name == "web_search":
         return web_search(**args)
     if name == "get_crypto_price":
